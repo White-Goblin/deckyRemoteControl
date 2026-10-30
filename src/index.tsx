@@ -97,7 +97,7 @@ function Content() {
           <PanelSectionRow>
             <ToggleField
               label="Use mDNS"
-              description="A host name that survives IP changes. Not all routers and devices support it."
+              description="A host name that survives IP changes. Not all devices support it, and iPhones open it slowly."
               checked={s.link_host === "name"}
               onChange={async (v) => setS(await setLinkHost(v ? "name" : "ip"))}
             />

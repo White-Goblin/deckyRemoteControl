@@ -59,6 +59,7 @@ class Plugin:
         self.last_emit = 0.0
         self.clients = 0
         self.error = ""
+        self.loop.run_in_executor(None, netinfo.refresh)  # find out whether the .local name works, off the loop
         if self.settings["enabled"]:
             decky.logger.info("Remote Control loaded (starting the server: it was left enabled)")
             self.start_task = asyncio.ensure_future(self._autostart())
@@ -210,6 +211,17 @@ class Plugin:
         if self.server and self.app_name is not None:
             self.server.broadcast_clients(json.dumps({"t": "app", "name": self.app_name}))
 
+    @staticmethod
+    def _log_timing(m):
+        """The phone reports how its page load went, so a slow launch can be traced to a step."""
+        n = {k: int(m[k]) for k in ("dns", "connect", "ttfb", "dom", "wsOpen") if isinstance(m.get(k), (int, float))}
+        decky.logger.info(
+            "phone timing (ms since its page started): "
+            + ", ".join(f"{label} {n[k]}" for label, k in (("name lookup", "dns"), ("connect", "connect"),
+                                                          ("first byte", "ttfb"), ("page ready", "dom"),
+                                                          ("socket open", "wsOpen")) if k in n)
+            + (", home-screen app" if m.get("standalone") else ", browser tab"))
+
     def _toast(self, message):
         if self.server:
             self.server.broadcast_clients(json.dumps({"t": "toast", "m": str(message)[:80]}))
@@ -321,6 +333,8 @@ class Plugin:
                 asyncio.ensure_future(self._volume(m["a"]))
         elif t == "hello":
             self._push_app()
+        elif t == "timing":
+            self._log_timing(m)
         elif t == "act":
             if m.get("a") in ("steam", "qam", "quit"):
                 asyncio.ensure_future(decky.emit("rc_action", m["a"]))

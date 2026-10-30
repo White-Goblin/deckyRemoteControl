@@ -1,8 +1,9 @@
-import asyncio, base64, json, os, struct, sys, types, tempfile, importlib
+import asyncio, base64, json, os, socket, struct, sys, types, tempfile, importlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "py_modules"))
 import audio, netinfo, pointer_sync, store, uinput, wsserver
+_REAL_REFRESH = netinfo.refresh   # other tests replace it so they never send real mDNS queries
 
 
 def test_char_map():
@@ -186,6 +187,7 @@ def _load_main(tmp):
     d.emit = emit
     main.SETTINGS_FILE = os.path.join(tmp, "s.json")
     main.pointer_sync.XPointers = lambda: (_ for _ in ()).throw(OSError("no X"))
+    main.netinfo.refresh = lambda: None   # no real mDNS queries from tests
 
     class Dev:
         def __init__(s, *a, **k): pass
@@ -217,24 +219,67 @@ def test_links_prefer_the_stable_name_with_an_ip_fallback():
         "http://10.0.0.5:8765/T/", None)                                   # no mDNS name: only the IP
 
 
-def test_mdns_name_comes_from_avahi_not_a_guess():
-    # busctl prints the name avahi really advertises, which differs from the host name after a clash
-    assert netinfo.mdns_name(lambda: 'steam-machine-2.local') == "steam-machine-2.local"
-    class Done:
-        stdout = 's "steam-machine-2.local"\n'
-    real = netinfo.subprocess.run
+def _mdns_response(host, ip, cache_flush=True):
+    """A DNS response with one A record, the name written once and compressed in the answer."""
+    name = netinfo._encode(host)
+    return (struct.pack(">HHHHHH", 0, 0x8400, 1, 1, 0, 0) + name + struct.pack(">HH", 1, 0x8001)
+            + b"\xc0\x0c" + struct.pack(">HHIH", 1, 0x8001 if cache_flush else 1, 120, 4) + socket.inet_aton(ip))
+
+
+def _responder(answer):
+    """A tiny mDNS responder on loopback; returns (port, received_queries, stop)."""
+    import socket, threading
+    srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); srv.bind(("127.0.0.1", 0)); srv.settimeout(0.1)
+    seen, stop = [], threading.Event()
+    def loop():
+        while not stop.is_set():
+            try: data, addr = srv.recvfrom(9000)
+            except OSError: continue
+            seen.append(data)
+            if answer: srv.sendto(answer, addr)
+    t = threading.Thread(target=loop, daemon=True); t.start()
+    return srv.getsockname()[1], seen, lambda: (stop.set(), t.join(), srv.close())
+
+
+def test_mdns_probe_asks_the_network_and_checks_name_and_address():
+    import socket
+    port, seen, stop = _responder(_mdns_response("steam-machine.local", "10.0.0.5"))
     try:
-        netinfo.subprocess.run = lambda *a, **k: Done()
-        assert netinfo._ask_avahi() == "steam-machine-2.local"
-        Done.stdout = "Failed to connect to bus\n"                         # avahi not running
-        assert netinfo._ask_avahi() is None
-        Done.stdout = 's "bad name; rm -rf"\n'                              # never trust odd output
-        assert netinfo._ask_avahi() is None
-        def missing(*a, **k): raise FileNotFoundError("busctl")
-        netinfo.subprocess.run = missing
-        assert netinfo._ask_avahi() is None
+        assert netinfo.probe("steam-machine.local", "10.0.0.5", 0.5, ("127.0.0.1", port))
+        q = seen[0]                                                         # the query it sent: type A, "unicast reply" bit set
+        assert q[12:].startswith(netinfo._encode("steam-machine.local")) and q[-4:] == b"\x00\x01\x80\x01"
+        assert not netinfo.probe("steam-machine.local", "10.0.0.9", 0.3, ("127.0.0.1", port))   # someone else's address
+        assert not netinfo.probe("other.local", "10.0.0.5", 0.3, ("127.0.0.1", port))             # a different name
     finally:
-        netinfo.subprocess.run = real
+        stop()
+    port, seen, stop = _responder(None)                                      # nobody answers
+    try:
+        assert not netinfo.probe("steam-machine.local", "10.0.0.5", 0.2, ("127.0.0.1", port))
+    finally:
+        stop()
+    assert netinfo._a_records(b"\x00" * 5) == [] and netinfo._a_records(b"\x00\x00\x00\x00" + b"\xff" * 8) == []   # junk is ignored
+
+
+def test_mdns_name_never_blocks_and_is_remembered():
+    import time as _t
+    saved = netinfo.check, netinfo.refresh, dict(netinfo._cache)
+    netinfo.refresh = _REAL_REFRESH
+    calls = []
+    def slow():
+        calls.append(1); _t.sleep(0.3); return "box.local"
+    try:
+        netinfo.check = slow
+        netinfo._cache.update(at=float("-inf"), name=None, busy=False)
+        t0 = _t.monotonic()
+        assert netinfo.mdns_name() is None and _t.monotonic() - t0 < 0.1    # answers at once, looks it up in the background
+        _t.sleep(0.5)
+        assert netinfo.mdns_name() == "box.local" and len(calls) == 1       # remembered: no second lookup yet
+        netinfo._cache["at"] = float("-inf")
+        assert netinfo.mdns_name() == "box.local"                           # stale: still answers at once with the old value
+        _t.sleep(0.5)
+        assert len(calls) == 2
+    finally:
+        netinfo.check, netinfo.refresh = saved[0], saved[1]; netinfo._cache.clear(); netinfo._cache.update(saved[2])
 
 
 def test_links_use_the_ip_by_default_and_the_name_with_mdns_on():
@@ -365,3 +410,40 @@ async def _ws_status(port, path):
     line = await asyncio.wait_for(r.readline(), 2)
     w.close()
     return line
+
+
+def test_launch_diagnostics_are_logged_and_head_works():
+    async def run():
+        tmp = tempfile.mkdtemp(); main = _load_main(tmp)
+        lines = []
+        main.decky.logger = types.SimpleNamespace(info=lines.append, error=lines.append, warning=lines.append)
+        p = main.Plugin(); await p._main(); p.settings["port"] = 18815
+        await p.set_enabled(True)
+        k = p.settings["token"]
+        ua_app = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"
+        ua_safari = ua_app + " Version/17.0 Safari/604.1"
+        async def req(method, path, ua="curl"):
+            r, w = await asyncio.open_connection("127.0.0.1", 18815)
+            w.write(f"{method} {path} HTTP/1.1\r\nHost: steam-machine.local:18815\r\nUser-Agent: {ua}\r\n\r\n".encode())
+            data = await r.read(); w.close()
+            head, _, body = data.partition(b"\r\n\r\n")
+            return head, body
+        head, body = await req("HEAD", f"/{k}/")
+        assert b"200" in head and b"Content-Length: " in head and body == b""      # headers only
+        assert not (await req("HEAD", f"/{k}/icon-192.png"))[1]
+        await req("GET", f"/{k}/", ua_app)
+        await req("GET", f"/{k}/", ua_safari)
+        text = "\n".join(map(str, lines))
+        assert "(iOS), reached via steam-machine.local:18815" in text and "(other)" in text   # which address it used
+        # the socket log says how long after its page the phone connected
+        lines.clear()
+        assert b"101" in await _ws_status(18815, f"/{k}/ws")
+        assert "socket open for 127.0.0.1" in "\n".join(map(str, lines))
+        # the phone reports its own timing; it is logged in readable form, junk is ignored
+        lines.clear()
+        p._on_message({"t": "timing", "dns": 3, "connect": 5, "ttfb": 7, "dom": 120, "wsOpen": 480, "standalone": True})
+        p._on_message({"t": "timing", "dns": "x", "wsOpen": None})
+        out = "\n".join(map(str, lines))
+        assert "name lookup 3, connect 5, first byte 7, page ready 120, socket open 480, home-screen app" in out
+        await p._unload()
+    asyncio.run(run())

@@ -218,10 +218,18 @@
   const offline = $('#offline'); let offTimer = 0, lastSeen = 0;
   const markDown = () => { if (!offTimer) offTimer = setTimeout(() => offline.classList.add('show'), 1500); };
   const markUp = () => { clearTimeout(offTimer); offTimer = 0; offline.classList.remove('show'); };
+  let timingSent = false;
+  function reportTiming() {   // how long this launch took, as the phone saw it (logged on the device)
+    if (timingSent) return; timingSent = true;
+    const n = performance.getEntriesByType('navigation')[0] || {}, r = Math.round;
+    ws.send(JSON.stringify({ t: 'timing', dns: r(n.domainLookupEnd - n.domainLookupStart), connect: r(n.connectEnd - n.connectStart),
+      ttfb: r(n.responseStart - n.requestStart), dom: r(n.domContentLoadedEventEnd), wsOpen: r(performance.now()),
+      standalone: !!navigator.standalone || matchMedia('(display-mode: standalone)').matches }));
+  }
   function connect() {
     ws = new WebSocket(wsUrl);
     ws.onmessage = (e) => { lastSeen = Date.now(); try { const m = JSON.parse(e.data); if (m.t === 'toast') toast(m.m); else if (m.t === 'app') setApp(m.name); } catch (err) {} };
-    ws.onopen = () => { retry = 0; lastSeen = Date.now(); markUp(); ws.send(JSON.stringify({ t: 'hello' })); queue.forEach((m) => ws.send(m)); queue = []; };
+    ws.onopen = () => { retry = 0; lastSeen = Date.now(); markUp(); ws.send(JSON.stringify({ t: 'hello' })); reportTiming(); queue.forEach((m) => ws.send(m)); queue = []; };
     ws.onclose = () => { markDown(); setTimeout(connect, Math.min(3000, 300 * ++retry)); };
     ws.onerror = () => ws.close();
   }

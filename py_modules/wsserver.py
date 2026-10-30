@@ -7,6 +7,7 @@ import json
 import os
 import re
 import struct
+import time
 from urllib.parse import parse_qs, urlsplit
 
 _GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -70,6 +71,7 @@ class Server:
         self.log = log or (lambda msg: None)
         self.clients = set()
         self.cursors = set()
+        self.pages = {}  # peer -> when it was last served the page, to time its socket
         self._server = None
 
     async def start(self, port):
@@ -105,12 +107,19 @@ class Server:
             except Exception:
                 self.cursors.discard(w)
 
-    async def _http(self, writer, status, body=b"", ctype="text/plain", cache="no-store"):
+    async def _http(self, writer, status, body=b"", ctype="text/plain", cache="no-store", head=False):
         charset = "" if ctype.startswith("image/") else "; charset=utf-8"
         writer.write(f"HTTP/1.1 {status}\r\nContent-Type: {ctype}{charset}\r\n"
                      f"Content-Length: {len(body)}\r\nCache-Control: {cache}\r\n"
-                     f"Connection: close\r\n\r\n".encode() + body)
+                     f"Connection: close\r\n\r\n".encode() + (b"" if head else body))
         await writer.drain()
+
+    @staticmethod
+    def client_kind(headers):
+        """Roughly what is connecting. A saved iOS home-screen app sends the same User-Agent as Safari,
+        so only the phone's own timing report (standalone or not) can tell those apart."""
+        ua = headers.get("user-agent", "")
+        return "iOS" if "iPhone" in ua or "iPad" in ua else "other"
 
     @staticmethod
     def manifest():
@@ -148,17 +157,21 @@ class Server:
                 await writer.drain()
                 return
             path = m.group(2)
+            peer = (writer.get_extra_info("peername") or ("?",))[0]
+            head = method == "HEAD"
             if path == "/ws" and headers.get("upgrade", "").lower() == "websocket":
-                await self._ws(reader, writer, headers, q)
-            elif method == "GET" and path in ("/", "/index.html"):
+                await self._ws(reader, writer, headers, q, peer)
+            elif method in ("GET", "HEAD") and path in ("/", "/index.html"):
+                self.pages[peer] = time.monotonic()
+                self.log(f"page for {peer} ({self.client_kind(headers)}), reached via {headers.get('host', '?')}")
                 with open(self.index_path, "rb") as f:
-                    await self._http(writer, "200 OK", f.read(), "text/html")
-            elif method == "GET" and path == "/manifest.webmanifest":
-                await self._http(writer, "200 OK", self.manifest(), "application/manifest+json")
-            elif method == "GET" and path in ICONS:
+                    await self._http(writer, "200 OK", f.read(), "text/html", head=head)
+            elif method in ("GET", "HEAD") and path == "/manifest.webmanifest":
+                await self._http(writer, "200 OK", self.manifest(), "application/manifest+json", head=head)
+            elif method in ("GET", "HEAD") and path in ICONS:
                 try:
                     with open(os.path.join(os.path.dirname(self.index_path), ICONS[path]), "rb") as f:
-                        await self._http(writer, "200 OK", f.read(), "image/png", "public, max-age=86400")
+                        await self._http(writer, "200 OK", f.read(), "image/png", "public, max-age=86400", head=head)
                 except OSError:
                     await self._http(writer, "404 Not Found", b"not found")
             else:
@@ -173,7 +186,7 @@ class Server:
             except Exception:
                 pass
 
-    async def _ws(self, reader, writer, headers, q):
+    async def _ws(self, reader, writer, headers, q, peer="?"):
         key = headers.get("sec-websocket-key", "").encode()
         accept = base64.b64encode(hashlib.sha1(key + _GUID).digest()).decode()
         writer.write(("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
@@ -189,6 +202,8 @@ class Server:
             finally:
                 self.cursors.discard(writer)
             return
+        served = self.pages.pop(peer, None)
+        self.log(f"socket open for {peer}" + (f", {round((time.monotonic() - served) * 1000)} ms after its page was served" if served else ""))
         self.clients.add(writer)
         self.on_clients(len(self.clients))
         try:
