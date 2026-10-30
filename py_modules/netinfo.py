@@ -32,8 +32,8 @@ def links(port, token, mode, ip=None, name=None, mdns=None):
     ip = ip or lan_ip()
     name = name if name is not None else hostname()
     mdns = mdns_available() if mdns is None else mdns
-    by_ip = f"http://{ip}:{port}/?t={token}"
+    by_ip = f"http://{ip}:{port}/{token}/"
     if not (mdns and name):
         return by_ip, None
-    by_name = f"http://{name}.local:{port}/?t={token}"
+    by_name = f"http://{name}.local:{port}/{token}/"
     return (by_ip, by_name) if mode == "ip" else (by_name, by_ip)

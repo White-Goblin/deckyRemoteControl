@@ -8,9 +8,9 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Remote">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png">
-<link rel="icon" href="/icon-192.png">
-<link rel="manifest" id="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png">
+<link rel="manifest" id="manifest" href="manifest.webmanifest">
 <title>Remote Control</title>
 <style>
   :root {
@@ -185,9 +185,10 @@
 (() => {
   const $ = (s) => document.querySelector(s);
   const pad = $('#pad'), kb = $('#kb'), ripple = $('#ripple'), hint = $('#hint');
-  const token = new URLSearchParams(location.search).get('t') || '';
-  // the manifest's start URL must carry the same token, so a saved app opens the same page
-  $('#manifest').href = '/manifest.webmanifest?t=' + encodeURIComponent(token);
+  // The access key is the first part of the path (/<key>/), so it survives being saved as a bookmark
+  // or app and every other link on the page can be relative.
+  const key = (location.pathname.match(/^\/([A-Za-z0-9_-]+)\/$/) || [])[1] || '';
+  const wsUrl = `ws://${location.host}/${key}/ws`;
   let ws, retry = 0, queue = [];
 
   // ---- connection ----
@@ -198,7 +199,7 @@
   const markDown = () => { if (!offTimer) offTimer = setTimeout(() => offline.classList.add('show'), 1500); };
   const markUp = () => { clearTimeout(offTimer); offTimer = 0; offline.classList.remove('show'); };
   function connect() {
-    ws = new WebSocket(`ws://${location.host}/ws?t=${encodeURIComponent(token)}`);
+    ws = new WebSocket(wsUrl);
     ws.onmessage = (e) => { lastSeen = Date.now(); try { const m = JSON.parse(e.data); if (m.t === 'toast') toast(m.m); else if (m.t === 'app') setApp(m.name); } catch (err) {} };
     ws.onopen = () => { retry = 0; lastSeen = Date.now(); markUp(); ws.send(JSON.stringify({ t: 'hello' })); queue.forEach((m) => ws.send(m)); queue = []; };
     ws.onclose = () => { markDown(); setTimeout(connect, Math.min(3000, 300 * ++retry)); };

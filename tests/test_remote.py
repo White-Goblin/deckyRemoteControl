@@ -56,7 +56,7 @@ def test_end_to_end():
 
         async def client(token):
             r, w = await asyncio.open_connection("127.0.0.1", 18765)
-            w.write((f"GET /ws?t={token} HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n"
+            w.write((f"GET /{token}/ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n"
                      "Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
                      "Sec-WebSocket-Version: 13\r\n\r\n").encode())
             return r, w, await r.readline()
@@ -79,8 +79,8 @@ def test_end_to_end():
         assert any(e[0] == "rc_activity" for e in events)
         # HTTP page served
         r2, w2 = await asyncio.open_connection("127.0.0.1", 18765)
-        w2.write(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
-        assert b"Remote Control" in await r2.read()
+        w2.write(f"GET /{tok}/ HTTP/1.1\r\nHost: x\r\n\r\n".encode())
+        assert b'id="pad"' in await r2.read()
         # the running app is pushed to the phone, and again on request
         async def frame():
             n = (await asyncio.wait_for(r.readexactly(2), 2))[1] & 0x7F
@@ -210,18 +210,17 @@ def test_store_atomic_and_recovers_from_backup():
 
 def test_links_prefer_the_stable_name_with_an_ip_fallback():
     assert netinfo.links(8765, "T", "name", ip="10.0.0.5", name="steam-machine", mdns=True) == (
-        "http://steam-machine.local:8765/?t=T", "http://10.0.0.5:8765/?t=T")
+        "http://steam-machine.local:8765/T/", "http://10.0.0.5:8765/T/")
     assert netinfo.links(8765, "T", "ip", ip="10.0.0.5", name="steam-machine", mdns=True) == (
-        "http://10.0.0.5:8765/?t=T", "http://steam-machine.local:8765/?t=T")
+        "http://10.0.0.5:8765/T/", "http://steam-machine.local:8765/T/")
     assert netinfo.links(8765, "T", "name", ip="10.0.0.5", name="steam-machine", mdns=False) == (
-        "http://10.0.0.5:8765/?t=T", None)                                 # no mDNS: only the IP
+        "http://10.0.0.5:8765/T/", None)                                   # no mDNS: only the IP
 
 
-def test_manifest_start_url_carries_the_token():
-    srv = wsserver.Server(os.path.join(ROOT, "web", "index.html"), lambda: "T", lambda m: None, lambda n: None)
-    m = json.loads(srv.manifest("a b&c"))
-    assert m["start_url"] == "/?t=a%20b%26c" and m["display"] == "standalone"
-    assert {i["src"] for i in m["icons"]} == {"/icon-192.png", "/icon-512.png"}
+def test_manifest_is_relative_so_the_saved_start_url_has_the_key():
+    m = json.loads(wsserver.Server.manifest())
+    assert m["start_url"] == "." and m["scope"] == "." and m["display"] == "standalone"
+    assert {i["src"] for i in m["icons"]} == {"icon-192.png", "icon-512.png"}
     for name in ("icon-192.png", "icon-512.png", "apple-touch-icon.png"):
         assert open(os.path.join(ROOT, "web", name), "rb").read(8) == b"\x89PNG\r\n\x1a\n"
 
@@ -281,20 +280,48 @@ def test_failed_toggle_does_not_stay_enabled():
     asyncio.run(run())
 
 
-def test_http_routes_manifest_icons_and_404():
+def test_links_survive_saving_and_bad_links_are_explained():
+    """The key is the first part of the path, so a saved bookmark/app keeps it; anything without a
+    valid key gets a clear page instead of an app that cannot connect."""
     async def run():
         tmp = tempfile.mkdtemp(); main = _load_main(tmp)
         p = main.Plugin(); await p._main(); p.settings["port"] = 18814
         await p.set_enabled(True)
+        k = p.settings["token"]
         async def get(path):
             r, w = await asyncio.open_connection("127.0.0.1", 18814)
             w.write(f"GET {path} HTTP/1.1\r\nHost: x\r\n\r\n".encode()); data = await r.read(); w.close()
-            return data.split(b"\r\n\r\n", 1)
-        head, body = await get("/manifest.webmanifest?t=abc")
-        assert b"200" in head and b"application/manifest+json" in head and json.loads(body)["start_url"] == "/?t=abc"
-        head, body = await get("/icon-192.png")
+            head, _, body = data.partition(b"\r\n\r\n")
+            return head, body
+        head, body = await get(f"/{k}/")
+        assert b"200" in head and b'id="pad"' in body
+        head, body = await get(f"/{k}/index.html")
+        assert b"200" in head and b'id="pad"' in body
+        head, body = await get(f"/{k}")                                      # no trailing slash: redirect
+        assert b"301" in head and f"Location: /{k}/".encode() in head
+        head, body = await get(f"/{k}/manifest.webmanifest")
+        assert b"manifest+json" in head and json.loads(body)["start_url"] == "."
+        head, body = await get(f"/{k}/icon-192.png")
         assert b"image/png" in head and body[:4] == b"\x89PNG" and b"max-age" in head
-        assert b"404" in (await get("/nope"))[0]
-        assert b"404" in (await get("/../main.py"))[0]
+        assert b"404" in (await get(f"/{k}/nope"))[0]
+        assert b"101" in await _ws_status(18814, f"/{k}/ws")
+        assert b"101" in await _ws_status(18814, f"/{k}/ws?role=cursor")
+        # no valid key (or the old ?t= style): refused with an explanation
+        for path in ("/", "/?t=" + k, "/index.html", "/manifest.webmanifest", "/icon-192.png",
+                     "/wrong/", "/wrong", "/nope", "/../main.py"):
+            head, body = await get(path)
+            assert b"403" in head and b"scan the QR code again" in body, path
+        assert b"403" in await _ws_status(18814, "/ws")
+        assert b"403" in await _ws_status(18814, "/wrong/ws")
+        assert b"403" in await _ws_status(18814, "/ws?t=" + k)
         await p._unload()
     asyncio.run(run())
+
+
+async def _ws_status(port, path):
+    r, w = await asyncio.open_connection("127.0.0.1", port)
+    w.write((f"GET {path} HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+             "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
+    line = await asyncio.wait_for(r.readline(), 2)
+    w.close()
+    return line

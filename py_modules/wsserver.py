@@ -2,15 +2,25 @@
 import asyncio
 import base64
 import hashlib
+import hmac
 import json
 import os
+import re
 import struct
-from urllib.parse import parse_qs, quote, urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 _GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 MAX_FRAME = 64 * 1024
 ICONS = {"/icon-192.png": "icon-192.png", "/icon-512.png": "icon-512.png",
-         "/apple-touch-icon.png": "apple-touch-icon.png"}
+         "/apple-touch-icon.png": "apple-touch-icon.png"}  # served under /<key>/ like everything else
+# Every URL starts with the access key (/<key>/...): unlike a query string, a path survives being
+# saved as a bookmark or home-screen app, and the page's relative links keep working underneath it.
+KEY_PATH = re.compile(r"^/([A-Za-z0-9_-]+)(/.*)?$")
+BAD_LINK = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Remote Control</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0a0e15;color:#e6edf8;
+font:16px/1.5 system-ui,sans-serif;text-align:center;padding:24px}h1{font-size:20px;margin:0 0 8px}p{color:#8592a8;max-width:32em;margin:0 auto}</style></head>
+<body><div><h1>Remote Control</h1><p>This link is missing its key, or the key has changed (for example after pressing
+&ldquo;New link&rdquo;). Open the plugin on the device and scan the QR code again.</p></div></body></html>"""
 
 
 async def read_frame(reader):
@@ -52,11 +62,12 @@ def make_frame(op, payload=b""):
 
 
 class Server:
-    def __init__(self, index_html_path, get_token, on_message, on_clients):
+    def __init__(self, index_html_path, get_token, on_message, on_clients, log=None):
         self.index_path = index_html_path
         self.get_token = get_token
         self.on_message = on_message
         self.on_clients = on_clients
+        self.log = log or (lambda msg: None)
         self.clients = set()
         self.cursors = set()
         self._server = None
@@ -101,17 +112,21 @@ class Server:
                      f"Connection: close\r\n\r\n".encode() + body)
         await writer.drain()
 
-    def manifest(self, token):
-        """Web app manifest so a phone can keep the page as an app. The start URL carries the
-        token the manifest was requested with (the page links it with its own token)."""
+    @staticmethod
+    def manifest():
+        """Web app manifest so a phone can keep the page as an app. Everything is relative to the
+        manifest's own URL, so the saved start URL contains the key."""
         return json.dumps({
             "name": "Remote Control", "short_name": "Remote",
             "description": "Touchpad and keyboard for your SteamOS device",
-            "start_url": "/?t=" + quote(token, safe=""), "scope": "/", "display": "standalone",
+            "start_url": ".", "scope": ".", "display": "standalone",
             "background_color": "#0a0e15", "theme_color": "#0a0e15",
-            "icons": [{"src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
-                      {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}],
+            "icons": [{"src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+                      {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}],
         }).encode()
+
+    def _valid(self, token):
+        return hmac.compare_digest(token or "", self.get_token())
 
     async def _handle(self, reader, writer):
         try:
@@ -122,16 +137,27 @@ class Server:
                        (l.split(":", 1) for l in lines[1:] if ":" in l)}
             url = urlsplit(target)
             q = parse_qs(url.query)
-            if headers.get("upgrade", "").lower() == "websocket" and url.path == "/ws":
+            m = KEY_PATH.match(url.path)
+            if not (m and self._valid(m.group(1))):
+                self.log(f"http: {url.path} has no valid key in it")
+                await self._http(writer, "403 Forbidden", BAD_LINK.encode(), "text/html")
+                return
+            if m.group(2) is None:  # /<key> -> /<key>/ so the page's relative links resolve
+                writer.write(f"HTTP/1.1 301 Moved Permanently\r\nLocation: /{m.group(1)}/\r\n"
+                             f"Content-Length: 0\r\nConnection: close\r\n\r\n".encode())
+                await writer.drain()
+                return
+            path = m.group(2)
+            if path == "/ws" and headers.get("upgrade", "").lower() == "websocket":
                 await self._ws(reader, writer, headers, q)
-            elif method == "GET" and url.path in ("/", "/index.html"):
+            elif method == "GET" and path in ("/", "/index.html"):
                 with open(self.index_path, "rb") as f:
                     await self._http(writer, "200 OK", f.read(), "text/html")
-            elif method == "GET" and url.path == "/manifest.webmanifest":
-                await self._http(writer, "200 OK", self.manifest(q.get("t", [""])[0]), "application/manifest+json")
-            elif method == "GET" and url.path in ICONS:
+            elif method == "GET" and path == "/manifest.webmanifest":
+                await self._http(writer, "200 OK", self.manifest(), "application/manifest+json")
+            elif method == "GET" and path in ICONS:
                 try:
-                    with open(os.path.join(os.path.dirname(self.index_path), ICONS[url.path]), "rb") as f:
+                    with open(os.path.join(os.path.dirname(self.index_path), ICONS[path]), "rb") as f:
                         await self._http(writer, "200 OK", f.read(), "image/png", "public, max-age=86400")
                 except OSError:
                     await self._http(writer, "404 Not Found", b"not found")
@@ -148,10 +174,6 @@ class Server:
                 pass
 
     async def _ws(self, reader, writer, headers, q):
-        import hmac
-        if not hmac.compare_digest(q.get("t", [""])[0], self.get_token()):
-            await self._http(writer, "403 Forbidden", b"bad token")
-            return
         key = headers.get("sec-websocket-key", "").encode()
         accept = base64.b64encode(hashlib.sha1(key + _GUID).digest()).decode()
         writer.write(("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"

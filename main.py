@@ -80,7 +80,7 @@ class Plugin:
             "link_host": self.settings["link_host"],
             "clients": self.clients,
             "sensitivity": self.settings["sensitivity"],
-            "cursor_ws": f"ws://127.0.0.1:{port}/ws?t={self.settings['token']}&role=cursor",
+            "cursor_ws": f"ws://127.0.0.1:{port}/{self.settings['token']}/ws?role=cursor",
             "error": self.error,
         }
 
@@ -96,7 +96,7 @@ class Plugin:
             self.keyboard = uinput.Keyboard()
             self.server = Server(
                 os.path.join(decky.DECKY_PLUGIN_DIR, "web", "index.html"),
-                lambda: self.settings["token"], self._on_message, self._on_clients)
+                lambda: self.settings["token"], self._on_message, self._on_clients, decky.logger.info)
             await self.server.start(self.settings["port"])
             self.pointer.move(-20000, -20000)  # known corner; tracking restarts at (0, 0)
             self.x = self.y = 0.0
