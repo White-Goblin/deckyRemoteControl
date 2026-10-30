@@ -14,31 +14,33 @@
 <title>Remote Control</title>
 <style>
   :root {
-    color-scheme: dark; --vh: 100dvh;
+    color-scheme: dark;
     --bg: #0a0e15; --ink: #e6edf8; --muted: #8592a8; --accent: #1a9fff; --danger: #e5484d;
     --surface-top: #1e2738; --surface-bot: #151c2a; --hair: rgba(255,255,255,.07);
     --gap: 8px;
     --dpad: min(clamp(160px, 24vh, 220px), 46vw);
-    --vol-h: 54px;
-    --dock: calc(var(--dpad) + 26px + var(--vol-h) + env(safe-area-inset-bottom));
   }
-  @media (max-height: 480px) { :root { --vol-h: 0px; } }
+  @supports (height: 1dvh) { :root { --dpad: min(clamp(160px, 24dvh, 220px), 46vw); } }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body { margin: 0; height: var(--vh); background: var(--bg); color: var(--ink);
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
     font: 15px/1.3 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; overscroll-behavior: none;
     -webkit-font-smoothing: antialiased; }
   svg { display: block; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
   button { font: inherit; color: inherit; touch-action: manipulation; -webkit-user-select: none; user-select: none; }
 
+  /* the screen: safe areas (notch, home indicator) are padding, the trackpad takes the height that is left */
+  #app { position: fixed; inset: 0; display: flex; flex-direction: column;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); }
+
   /* trackpad card */
-  #pad { position: fixed; inset: calc(10px + env(safe-area-inset-top)) calc(10px + env(safe-area-inset-right)) calc(var(--dock) + 4px) calc(10px + env(safe-area-inset-left));
+  #pad { position: relative; flex: 1 1 0; min-height: 120px; margin: 10px 10px 4px;
     touch-action: none; user-select: none; -webkit-user-select: none; display: grid; place-items: center; text-align: center;
     border-radius: 24px; border: 1px solid var(--hair);
     background:
       radial-gradient(rgba(255,255,255,.07) 1px, transparent 1.3px) 0 0 / 20px 20px,
       radial-gradient(120% 90% at 50% 25%, #1b2639 0%, #111826 55%, #0d121c 100%);
     box-shadow: inset 0 1px 0 rgba(255,255,255,.05), 0 8px 30px rgba(0,0,0,.35); }
-  #hint { display: grid; gap: 12px; transition: opacity .6s; pointer-events: none; color: var(--muted); font-size: 13px; letter-spacing: .02em; }
+  #hint { padding: 0 14px; max-width: 100%; display: grid; gap: 12px; transition: opacity .6s; pointer-events: none; color: var(--muted); font-size: 13px; letter-spacing: .02em; }
   #hint div { display: flex; align-items: center; gap: 10px; justify-content: center; }
   #hint svg { width: 20px; height: 20px; color: #6f7f99; }
   #hint b { color: #c9d4e8; font-weight: 600; }
@@ -59,10 +61,11 @@
   @keyframes pulse { 50% { box-shadow: 0 0 0 6px rgba(229,72,77,.25); } }
 
   /* dock */
-  #dock { position: fixed; left: 0; right: 0; bottom: 0; height: var(--dock); display: grid; align-content: center; justify-content: center;
-    grid-template-columns: minmax(0, 200px) auto minmax(0, 200px); grid-template-rows: auto var(--dpad); column-gap: 14px; row-gap: 8px;
-    grid-template-areas: "vol vol vol" "left dpad right";
-    padding: 0 calc(12px + env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left)); }
+  #dock { flex: none; display: grid; justify-content: center;
+    grid-template-columns: minmax(0, 200px) auto minmax(0, 200px); grid-template-rows: var(--dpad) auto; column-gap: 14px; row-gap: 8px;
+    grid-template-areas: "left dpad right" "vol vol vol";
+    /* clear the home indicator without leaving a wide empty strip below the buttons */
+    padding: 4px 12px max(8px, calc(env(safe-area-inset-bottom) - 12px)); }
   .zone.left { grid-area: left; } .zone.right { grid-area: right; } .dpad { grid-area: dpad; align-self: center; }
   .zone { display: flex; flex-direction: column; gap: var(--gap); height: var(--dpad); min-width: 0; }
   .btn { position: relative; display: flex; align-items: center; justify-content: center; gap: 8px; flex: 1; min-width: 0; padding: 0 10px;
@@ -122,18 +125,23 @@
   #vol button + button { border-left: 1px solid var(--hair); }
   #vol button svg { width: 28px; height: 28px; }
   #vol button.down { background: rgba(26,159,255,.28); color: #fff; }
-  @media (max-height: 480px) {
-    #dock { grid-template-columns: minmax(0, 170px) auto minmax(0, 170px); grid-template-rows: var(--dpad); grid-template-areas: "left dpad right"; }
-    #vol { position: fixed; right: calc(12px + env(safe-area-inset-right)); bottom: calc(8px + env(safe-area-inset-bottom));
-      flex-direction: column; width: 54px; height: var(--dpad); }
+  /* landscape phones: buttons on the left (volume strip on the far left), trackpad on the right */
+  @media (orientation: landscape) and (max-height: 560px) {
+    :root { --dpad: min(clamp(120px, 46vh, 170px), 24vw); }
+    #app { flex-direction: row; padding-bottom: max(0px, calc(env(safe-area-inset-bottom) - 12px)); }
+    #dock { order: -1; align-self: center; grid-template-columns: 46px clamp(64px, 11vw, 92px) auto clamp(64px, 11vw, 92px); grid-template-rows: var(--dpad);
+      grid-template-areas: "vol left dpad right"; column-gap: 8px; padding: 4px 4px 4px 12px; }
+    #vol { flex-direction: column-reverse; width: 46px; height: var(--dpad); }   /* + on top, - at the bottom */
     #vol button + button { border-left: 0; border-top: 1px solid var(--hair); }
+    #pad { margin: 10px 10px 10px 4px; min-width: 120px; }
   }
+  @supports (height: 1dvh) { @media (orientation: landscape) and (max-height: 560px) { :root { --dpad: min(clamp(120px, 46dvh, 170px), 24vw); } } }
   #ripple { position: fixed; width: 60px; height: 60px; margin: -30px 0 0 -30px; border-radius: 50%;
     border: 2px solid rgba(26,159,255,.8); background: rgba(26,159,255,.12); pointer-events: none; opacity: 0; }
   #ripple.go { animation: rp .38s ease-out; }
   @keyframes rp { from { opacity: .95; transform: scale(.4); } to { opacity: 0; transform: scale(1.25); } }
 
-  #toast { position: fixed; z-index: 6; left: 50%; bottom: calc(var(--dock) + 14px); transform: translateX(-50%); max-width: 82vw;
+  #toast { position: absolute; z-index: 6; left: 50%; bottom: 14px; transform: translateX(-50%); max-width: 82vw;
     padding: 10px 18px; border-radius: 999px; background: rgba(14,20,31,.9); border: 1px solid var(--hair); color: var(--ink);
     -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); font-size: 14px; font-weight: 600;
     opacity: 0; transition: opacity .25s; pointer-events: none; box-shadow: 0 8px 24px rgba(0,0,0,.45); }
@@ -144,6 +152,7 @@
 </style>
 </head>
 <body>
+<div id="app">
 <div id="pad">
   <div id="hint">
     <div><svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg><span><b>Drag</b> to move</span></div>
@@ -151,12 +160,8 @@
     <div><svg viewBox="0 0 24 24"><path d="M12 4v16M7 9l5-5 5 5M7 15l5 5 5-5"/></svg><span><b>Two fingers</b> to scroll or flick</span></div>
     <div><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.6-5.9M20 4v4h-4"/></svg><span><b>Spin the wheel</b> to scroll</span></div>
   </div>
+  <div id="toast"></div>
 </div>
-<div id="ripple"></div>
-<div class="pill" id="offline" role="status"><i></i>Not connected</div>
-<button class="pill" id="quit" aria-label="Quit running app"><svg viewBox="0 0 24 24"><path d="M12 3v8M6.4 6.6a8 8 0 1 0 11.2 0"/></svg><span id="quitText">Quit app</span></button>
-<div id="toast"></div>
-<textarea id="kb" autocapitalize="sentences" autocomplete="off" autocorrect="on" spellcheck="true" aria-label="keyboard input"></textarea>
 <div id="dock">
   <div id="vol">
     <button data-vol="down" aria-label="Volume down"><svg viewBox="0 0 24 24"><path d="M4 9.5h3.2L12 5.5v13l-4.8-4H4z"/><path d="M16 12h5"/></svg></button>
@@ -181,6 +186,11 @@
     <button class="btn tile kb" id="kbBtn" aria-label="Keyboard"><svg viewBox="0 0 32 24"><rect x="1.5" y="3" width="29" height="18" rx="4.5"/><g class="keys"><circle cx="7" cy="8.2" r="1.15"/><circle cx="11.6" cy="8.2" r="1.15"/><circle cx="16.2" cy="8.2" r="1.15"/><circle cx="20.8" cy="8.2" r="1.15"/><circle cx="25" cy="8.2" r="1.15"/><circle cx="9.3" cy="12" r="1.15"/><circle cx="13.9" cy="12" r="1.15"/><circle cx="18.5" cy="12" r="1.15"/><circle cx="23" cy="12" r="1.15"/><rect x="9" y="15.3" width="14" height="2.2" rx="1.1"/></g></svg></button>
   </div>
 </div>
+</div>
+<div id="ripple"></div>
+<div class="pill" id="offline" role="status"><i></i>Not connected</div>
+<button class="pill" id="quit" aria-label="Quit running app"><svg viewBox="0 0 24 24"><path d="M12 3v8M6.4 6.6a8 8 0 1 0 11.2 0"/></svg><span id="quitText">Quit app</span></button>
+<textarea id="kb" autocapitalize="sentences" autocomplete="off" autocorrect="on" spellcheck="true" aria-label="keyboard input"></textarea>
 <script>
 (() => {
   const $ = (s) => document.querySelector(s);
@@ -222,10 +232,7 @@
   }, 5000);
   connect();
 
-  // ---- viewport / wake lock ----
-  const vv = window.visualViewport;
-  const fit = () => document.documentElement.style.setProperty('--vh', (vv ? vv.height : innerHeight) + 'px');
-  vv && vv.addEventListener('resize', fit); fit();
+  // ---- wake lock ----
   async function wake() { try { await navigator.wakeLock.request('screen'); } catch (e) {} }
   document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && wake());
   wake();
