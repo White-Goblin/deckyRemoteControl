@@ -60,6 +60,7 @@ class Plugin:
         self.audio = audio.Audio()
         self.vol_lock = asyncio.Lock()
         self.vol_pending = 0
+        self.app_name = None  # None until the frontend reports; "" when no app runs
         self.xpointers = None
         self.view_event = None
         self.press_lock = asyncio.Lock()
@@ -165,6 +166,15 @@ class Plugin:
     async def action_result(self, message: str):
         """The frontend reports what an action did; show it on the phone."""
         self._toast(message)
+
+    async def app_state(self, name: str):
+        """The frontend reports the running app so the phone's Quit button can name it."""
+        self.app_name = str(name)[:80]
+        self._push_app()
+
+    def _push_app(self):
+        if self.server and self.app_name is not None:
+            self.server.broadcast_clients(json.dumps({"t": "app", "name": self.app_name}))
 
     def _toast(self, message):
         if self.server:
@@ -273,6 +283,8 @@ class Plugin:
             if m.get("a") in ("up", "down", "mute") and self.vol_pending < 3:
                 self.vol_pending += 1
                 asyncio.ensure_future(self._volume(m["a"]))
+        elif t == "hello":
+            self._push_app()
         elif t == "act":
             if m.get("a") in ("steam", "qam", "quit"):
                 asyncio.ensure_future(decky.emit("rc_action", m["a"]))

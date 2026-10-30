@@ -87,6 +87,17 @@ def test_end_to_end():
         r2, w2 = await asyncio.open_connection("127.0.0.1", 18765)
         w2.write(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
         assert b"Remote Control" in await r2.read()
+        # the running app is pushed to the phone, and again on request
+        async def frame():
+            n = (await asyncio.wait_for(r.readexactly(2), 2))[1] & 0x7F
+            return json.loads(await r.readexactly(n))
+        await p.app_state("Jellyfin")
+        assert await frame() == {"t": "app", "name": "Jellyfin"}
+        d = json.dumps({"t": "hello"}).encode()
+        w.write(bytes([0x81, 0x80 | len(d)]) + _mask(d))
+        assert await frame() == {"t": "app", "name": "Jellyfin"}
+        await p.app_state("")
+        assert await frame() == {"t": "app", "name": ""}
         w.close()
         await p._unload()
     asyncio.run(run())

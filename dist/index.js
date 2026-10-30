@@ -2483,6 +2483,7 @@ const MENU_MAIN = 1;
 const MENU_QUICK_ACCESS = 2;
 const APP_TYPE_SHORTCUT = 1073741824;
 const report = callable("action_result");
+const reportApp = callable("app_state");
 // Like the physical button: open the menu, or close it when it is already the one showing
 function toggleMenu(menu) {
     if (mainWindow()?.MenuStore?.GetOpenSideMenu?.() === menu)
@@ -2492,17 +2493,41 @@ function toggleMenu(menu) {
     else
         DFL.Navigation.OpenQuickAccessMenu();
 }
+// The app the Quit button acts on: Steam's first running app
+function activeApp() {
+    const running = [...(SteamUIStore.m_runningAppIDs ?? [])];
+    if (!running.length)
+        return null;
+    const appid = String(running[0]);
+    return { appid, name: appStore.GetAppOverviewByAppID(Number(appid))?.display_name || "App" };
+}
 // Shortcuts (non-Steam apps) are terminated by their 64-bit game id, Steam games by app id
 function quitRunningApp() {
-    const running = [...(SteamUIStore.m_runningAppIDs ?? [])];
-    if (!running.length) {
+    const app = activeApp();
+    if (!app) {
         report("No app is running");
         return;
     }
-    const appid = String(running[0]);
-    const overview = appStore.GetAppOverviewByAppID(Number(appid));
-    SteamClient.Apps.TerminateApp(overview?.app_type === APP_TYPE_SHORTCUT ? String(overview.m_gameid) : appid, false);
-    report(`Closing ${overview?.display_name ?? "app"}`);
+    const overview = appStore.GetAppOverviewByAppID(Number(app.appid));
+    SteamClient.Apps.TerminateApp(overview?.app_type === APP_TYPE_SHORTCUT ? String(overview.m_gameid) : app.appid, false);
+    report(`Closing ${app.name}`);
+}
+// Tell the backend (and so the phone's Quit button) which app is running; "" when none
+function syncRunningApp() {
+    let name = "";
+    try {
+        name = activeApp()?.name ?? "";
+    }
+    catch {
+        // Steam's store is not ready yet
+    }
+    reportApp(name).catch(() => { });
+}
+function watchRunningApp() {
+    syncRunningApp();
+    // the running list updates just after the notification arrives
+    const lifetime = SteamClient.GameSessions.RegisterForAppLifetimeNotifications(() => setTimeout(syncRunningApp, 300));
+    return () => lifetime?.unregister?.();
 }
 function runAction(action) {
     try {
@@ -2553,6 +2578,7 @@ function Content() {
 var index = definePlugin(() => {
     routerHook.addGlobalComponent("DeckyRemoteControlCursor", CursorOverlay);
     const listener = addEventListener("rc_activity", () => onActivity());
+    const unwatchApp = watchRunningApp();
     const actionListener = addEventListener("rc_action", runAction);
     const viewListener = addEventListener("rc_view", (visible) => {
         setViewVisible(visible);
@@ -2568,6 +2594,7 @@ var index = definePlugin(() => {
             removeEventListener("rc_activity", listener);
             removeEventListener("rc_view", viewListener);
             removeEventListener("rc_action", actionListener);
+            unwatchApp();
             disposeCursor();
             routerHook.removeGlobalComponent("DeckyRemoteControlCursor");
         },

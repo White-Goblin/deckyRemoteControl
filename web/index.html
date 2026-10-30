@@ -40,11 +40,11 @@
   .pill { position: fixed; z-index: 5; top: calc(20px + env(safe-area-inset-top)); display: flex; align-items: center; gap: 7px;
     height: 34px; padding: 0 12px; border-radius: 999px; background: rgba(12,17,26,.72); border: 1px solid var(--hair);
     -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); font-size: 12px; font-weight: 600; letter-spacing: .02em; }
-  #status { left: calc(20px + env(safe-area-inset-left)); color: var(--muted); }
-  #dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 8px currentColor; color: var(--danger); }
-  #dot.ok { background: #36d17b; color: #36d17b; }
   #quit { right: calc(20px + env(safe-area-inset-right)); border: 1px solid var(--hair); color: #b6c2d8; cursor: pointer; }
-  #quit svg { width: 16px; height: 16px; }
+  #quit svg { width: 16px; height: 16px; flex: none; }
+  #quit[hidden] { display: none; }
+  #quit { max-width: calc(100vw - 40px - env(safe-area-inset-right) - env(safe-area-inset-left)); }
+  #quitText { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: min(64vw, 280px); }
   #quit.armed { background: var(--danger); border-color: transparent; color: #fff; animation: pulse 1s ease-in-out infinite; }
   @keyframes pulse { 50% { box-shadow: 0 0 0 6px rgba(229,72,77,.25); } }
 
@@ -143,7 +143,6 @@
   </div>
 </div>
 <div id="ripple"></div>
-<div class="pill" id="status"><span id="dot"></span><span id="statusText">Connecting</span></div>
 <button class="pill" id="quit" aria-label="Quit running app"><svg viewBox="0 0 24 24"><path d="M12 3v8M6.4 6.6a8 8 0 1 0 11.2 0"/></svg><span id="quitText">Quit app</span></button>
 <div id="toast"></div>
 <textarea id="kb" autocapitalize="sentences" autocomplete="off" autocorrect="on" spellcheck="true" aria-label="keyboard input"></textarea>
@@ -174,16 +173,16 @@
 <script>
 (() => {
   const $ = (s) => document.querySelector(s);
-  const pad = $('#pad'), dot = $('#dot'), statusText = $('#statusText'), kb = $('#kb'), ripple = $('#ripple'), hint = $('#hint');
+  const pad = $('#pad'), kb = $('#kb'), ripple = $('#ripple'), hint = $('#hint');
   const token = new URLSearchParams(location.search).get('t') || '';
   let ws, retry = 0, queue = [];
 
   // ---- connection ----
   function connect() {
     ws = new WebSocket(`ws://${location.host}/ws?t=${encodeURIComponent(token)}`);
-    ws.onmessage = (e) => { try { const m = JSON.parse(e.data); if (m.t === 'toast') toast(m.m); } catch (err) {} };
-    ws.onopen = () => { retry = 0; dot.className = 'ok'; statusText.textContent = 'Connected'; queue.forEach((m) => ws.send(m)); queue = []; };
-    ws.onclose = () => { dot.className = ''; statusText.textContent = 'Reconnecting'; setTimeout(connect, Math.min(3000, 300 * ++retry)); };
+    ws.onmessage = (e) => { try { const m = JSON.parse(e.data); if (m.t === 'toast') toast(m.m); else if (m.t === 'app') setApp(m.name); } catch (err) {} };
+    ws.onopen = () => { retry = 0; ws.send(JSON.stringify({ t: 'hello' })); queue.forEach((m) => ws.send(m)); queue = []; };
+    ws.onclose = () => { setTimeout(connect, Math.min(3000, 300 * ++retry)); };
     ws.onerror = () => ws.close();
   }
   function send(o) {
@@ -361,12 +360,20 @@
     b.addEventListener('click', () => { buzz(); send({ t: 'act', a: b.dataset.act }); }));
   // quit needs a second tap within 3 s
   const quit = $('#quit'); let quitTimer = 0;
-  const quitText = $('#quitText');
-  const disarm = () => { clearTimeout(quitTimer); quit.classList.remove('armed'); quitText.textContent = 'Quit app'; };
+  const quitText = $('#quitText'), QUIT_MAX = 20;
+  let appName = null; // null: not reported yet (generic label), '': nothing is running (button hidden)
+  const clip = (n) => { n = n.trim(); return n.length > QUIT_MAX ? n.slice(0, QUIT_MAX - 1).trimEnd() + '\u2026' : n; };
+  function renderQuit() {
+    quit.hidden = appName === '';
+    quit.setAttribute('aria-label', appName ? 'Quit ' + appName : 'Quit running app');
+    quitText.textContent = quit.classList.contains('armed') ? 'Tap again to quit' : appName ? 'Quit ' + clip(appName) : 'Quit app';
+  }
+  const disarm = () => { clearTimeout(quitTimer); quit.classList.remove('armed'); renderQuit(); };
+  function setApp(name) { appName = name; disarm(); }
   quit.addEventListener('click', () => {
     buzz();
     if (quit.classList.contains('armed')) { disarm(); send({ t: 'act', a: 'quit' }); return; }
-    quit.classList.add('armed'); quitText.textContent = 'Tap again to quit'; quitTimer = setTimeout(disarm, 3000);
+    quit.classList.add('armed'); renderQuit(); quitTimer = setTimeout(disarm, 3000);
   });
   const kbBtn = $('#kbBtn');
   kbBtn.addEventListener('click', () => (document.activeElement === kb ? kb.blur() : kb.focus()));

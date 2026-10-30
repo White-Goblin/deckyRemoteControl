@@ -10,7 +10,7 @@ import { addEventListener, removeEventListener, callable, definePlugin, routerHo
 import { useEffect, useState } from "react";
 import { FaMobileAlt } from "react-icons/fa";
 import qrcode from "qrcode-generator";
-import { runAction } from "./actions";
+import { runAction, watchRunningApp } from "./actions";
 import { CursorOverlay, disposeCursor, onActivity, screenInfo, setViewVisible } from "./CursorOverlay";
 
 interface State {
@@ -103,6 +103,7 @@ function Content() {
 export default definePlugin(() => {
   routerHook.addGlobalComponent("DeckyRemoteControlCursor", CursorOverlay);
   const listener = addEventListener<[down: boolean]>("rc_activity", () => onActivity());
+  const unwatchApp = watchRunningApp();
   const actionListener = addEventListener<[action: string]>("rc_action", runAction);
   const viewListener = addEventListener<[visible: boolean]>("rc_view", (visible) => {
     setViewVisible(visible);
@@ -118,6 +119,7 @@ export default definePlugin(() => {
       removeEventListener("rc_activity", listener);
       removeEventListener("rc_view", viewListener);
       removeEventListener("rc_action", actionListener);
+      unwatchApp();
       disposeCursor();
       routerHook.removeGlobalComponent("DeckyRemoteControlCursor");
     },
