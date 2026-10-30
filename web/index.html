@@ -11,7 +11,7 @@
     --bg: #0a0e15; --ink: #e6edf8; --muted: #8592a8; --accent: #1a9fff; --danger: #e5484d;
     --surface-top: #1e2738; --surface-bot: #151c2a; --hair: rgba(255,255,255,.07);
     --gap: 8px;
-    --dpad: min(clamp(150px, 22vh, 200px), 42vw);
+    --dpad: min(clamp(160px, 24vh, 220px), 46vw);
     --vol-h: 54px;
     --dock: calc(var(--dpad) + 26px + var(--vol-h) + env(safe-area-inset-bottom));
   }
@@ -66,10 +66,7 @@
   .tile { flex-direction: column; gap: 7px; }
   .tile svg { width: 26px; height: 26px; color: #9ec9ff; }
   .tile.down { background: linear-gradient(180deg, #27456b, #1b3350); border-color: rgba(26,159,255,.45); }
-  .enter { flex: 1.3; background: linear-gradient(180deg, #2aa8ff, #1384e0); border-color: rgba(255,255,255,.18); color: #fff;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.3), 0 6px 16px rgba(26,159,255,.28); }
-  .esc svg { color: var(--muted); }
-  .kb svg { width: 38px; height: 38px; stroke-width: 1.6; }
+  .kb svg { width: 46px; height: 46px; stroke-width: 1.5; }
   .kb .keys { fill: currentColor; stroke: none; }
   .kb.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent), 0 0 18px rgba(26,159,255,.25); color: #bfe3ff; }
   .kb.on svg { color: var(--accent); }
@@ -92,9 +89,13 @@
   .wedge.right svg { right: 9%; top: 50%; margin-top: -16px; }
   .wedge.pressed { background: rgba(26,159,255,.30); color: #fff; }
   .dpad .cross { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; stroke: var(--bg); stroke-width: 2; opacity: .9; }
-  .hub { position: absolute; left: 50%; top: 50%; width: 32%; height: 32%; transform: translate(-50%, -50%); border-radius: 50%;
-    background: radial-gradient(circle at 50% 30%, #0f1522, #0a0f19); border: 1px solid var(--hair);
-    box-shadow: inset 0 2px 6px rgba(0,0,0,.6); }
+  .hub { position: absolute; left: 50%; top: 50%; width: 38%; height: 38%; margin: -19% 0 0 -19%; padding: 0; border-radius: 50%; cursor: pointer;
+    display: grid; place-items: center; color: #fff; border: 2px solid rgba(255,255,255,.22);
+    background: radial-gradient(circle at 50% 28%, #35b0ff, #1384e0 78%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 0 0 5px rgba(10,14,21,.55), 0 4px 14px rgba(26,159,255,.35);
+    transition: transform .08s ease, filter .08s ease; }
+  .hub svg { width: 46%; height: 46%; stroke-width: 2.2; }
+  .hub.down { transform: scale(.93); filter: brightness(1.2); }
 
   /* volume: one segmented control, a row above the dock (a column at the right in landscape) */
   #vol { grid-area: vol; display: flex; height: 46px; border-radius: 16px; overflow: hidden; border: 1px solid var(--hair);
@@ -122,7 +123,7 @@
     opacity: 0; transition: opacity .25s; pointer-events: none; box-shadow: 0 8px 24px rgba(0,0,0,.45); }
   #toast.show { opacity: 1; }
   #kb { position: fixed; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; resize: none; font-size: 16px; }
-  @media (max-width: 360px) { .btn { gap: 6px; padding: 0 6px; font-size: 11px; letter-spacing: .05em; } .btn svg { width: 18px; height: 18px; } .tile svg { width: 22px; height: 22px; } .btn.kb svg { width: 32px; height: 32px; } }
+  @media (max-width: 360px) { .btn { gap: 6px; padding: 0 6px; font-size: 11px; letter-spacing: .05em; } .btn svg { width: 18px; height: 18px; } .tile svg { width: 22px; height: 22px; } .btn.kb svg { width: 36px; height: 36px; } }
   @media (prefers-reduced-motion: reduce) { #quit.armed { animation: none; } #ripple.go { animation-duration: .01s; } .btn { transition: none; } }
 </style>
 </head>
@@ -155,12 +156,11 @@
     <button class="wedge down" data-k="Down" data-repeat aria-label="Down"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
     <button class="wedge left" data-k="Left" data-repeat aria-label="Left"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
     <svg class="cross" viewBox="0 0 100 100" preserveAspectRatio="none"><path d="M0 0L100 100M100 0L0 100"/></svg>
-    <div class="hub"></div>
+    <button class="hub" data-k="Enter" aria-label="Enter"><svg viewBox="0 0 24 24"><path d="M20 5v7a3 3 0 0 1-3 3H5M9 11l-4 4 4 4"/></svg></button>
   </div>
   <div class="zone right">
-    <button class="btn enter" data-k="Enter" aria-label="Enter"><svg viewBox="0 0 24 24"><path d="M20 5v7a3 3 0 0 1-3 3H5M9 11l-4 4 4 4"/></svg>Enter</button>
-    <button class="btn esc" data-k="Escape" aria-label="Escape"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>Esc</button>
-    <button class="btn kb" id="kbBtn" aria-label="Keyboard"><svg viewBox="0 0 32 24"><rect x="1.5" y="3" width="29" height="18" rx="4.5"/><g class="keys"><circle cx="7" cy="8.2" r="1.15"/><circle cx="11.6" cy="8.2" r="1.15"/><circle cx="16.2" cy="8.2" r="1.15"/><circle cx="20.8" cy="8.2" r="1.15"/><circle cx="25" cy="8.2" r="1.15"/><circle cx="9.3" cy="12" r="1.15"/><circle cx="13.9" cy="12" r="1.15"/><circle cx="18.5" cy="12" r="1.15"/><circle cx="23" cy="12" r="1.15"/><rect x="9" y="15.3" width="14" height="2.2" rx="1.1"/></g></svg></button>
+    <button class="btn tile esc" data-k="Escape" aria-label="Escape"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>Esc</button>
+    <button class="btn tile kb" id="kbBtn" aria-label="Keyboard"><svg viewBox="0 0 32 24"><rect x="1.5" y="3" width="29" height="18" rx="4.5"/><g class="keys"><circle cx="7" cy="8.2" r="1.15"/><circle cx="11.6" cy="8.2" r="1.15"/><circle cx="16.2" cy="8.2" r="1.15"/><circle cx="20.8" cy="8.2" r="1.15"/><circle cx="25" cy="8.2" r="1.15"/><circle cx="9.3" cy="12" r="1.15"/><circle cx="13.9" cy="12" r="1.15"/><circle cx="18.5" cy="12" r="1.15"/><circle cx="23" cy="12" r="1.15"/><rect x="9" y="15.3" width="14" height="2.2" rx="1.1"/></g></svg></button>
   </div>
 </div>
 <script>
