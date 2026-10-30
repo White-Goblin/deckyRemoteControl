@@ -49,8 +49,9 @@
   .pill { position: fixed; z-index: 5; top: calc(20px + env(safe-area-inset-top)); display: flex; align-items: center; gap: 7px;
     height: 34px; padding: 0 12px; border-radius: 999px; background: rgba(12,17,26,.72); border: 1px solid var(--hair);
     -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); font-size: 12px; font-weight: 600; letter-spacing: .02em; }
-  #offline { left: calc(20px + env(safe-area-inset-left)); color: #ffb4b6; opacity: 0; transition: opacity .25s ease; pointer-events: none; }
+  #offline { position: absolute; top: 10px; left: 10px; color: #ffb4b6; opacity: 0; transition: opacity .25s ease; pointer-events: none; }
   #offline.show { opacity: 1; }
+  body.off #quit { visibility: hidden; }   /* nothing to quit while disconnected, and it keeps a narrow card uncluttered */
   #offline i { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 8px var(--danger); }
   #quit { right: calc(20px + env(safe-area-inset-right)); border: 1px solid var(--hair); color: #b6c2d8; cursor: pointer; }
   #quit svg { width: 16px; height: 16px; flex: none; }
@@ -170,6 +171,7 @@
     <div><svg viewBox="0 0 24 24"><path d="M12 4v16M7 9l5-5 5 5M7 15l5 5 5-5"/></svg><span><b>Two fingers</b> to scroll or flick</span></div>
     <div><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.6-5.9M20 4v4h-4"/></svg><span><b>Spin the wheel</b> to scroll</span></div>
   </div>
+  <div class="pill" id="offline" role="status"><i></i>Not connected</div>
   <div id="toast"></div>
 </div>
 <div id="dock">
@@ -198,7 +200,6 @@
 </div>
 </div>
 <div id="ripple"></div>
-<div class="pill" id="offline" role="status"><i></i>Not connected</div>
 <button class="pill" id="quit" aria-label="Quit running app"><svg viewBox="0 0 24 24"><path d="M12 3v8M6.4 6.6a8 8 0 1 0 11.2 0"/></svg><span id="quitText">Quit app</span></button>
 <textarea id="kb" autocapitalize="sentences" autocomplete="off" autocorrect="on" spellcheck="true" aria-label="keyboard input"></textarea>
 <script>
@@ -216,8 +217,8 @@
   // quick reconnect (or the first connect) never flashes it. A silent drop (phone asleep, Wi-Fi
   // change) is caught by the missing heartbeat reply.
   const offline = $('#offline'); let offTimer = 0, lastSeen = 0;
-  const markDown = () => { if (!offTimer) offTimer = setTimeout(() => offline.classList.add('show'), 1500); };
-  const markUp = () => { clearTimeout(offTimer); offTimer = 0; offline.classList.remove('show'); };
+  const markDown = () => { if (!offTimer) offTimer = setTimeout(() => { offline.classList.add('show'); document.body.classList.add('off'); }, 1500); };
+  const markUp = () => { clearTimeout(offTimer); offTimer = 0; offline.classList.remove('show'); document.body.classList.remove('off'); };
   function connect() {
     ws = new WebSocket(wsUrl);
     ws.onmessage = (e) => { lastSeen = Date.now(); try { const m = JSON.parse(e.data); if (m.t === 'toast') toast(m.m); else if (m.t === 'app') setApp(m.name); } catch (err) {} };
