@@ -11,11 +11,14 @@ import { useEffect, useState } from "react";
 import { FaMobileAlt } from "react-icons/fa";
 import qrcode from "qrcode-generator";
 import { runAction, watchRunningApp } from "./actions";
-import { CursorOverlay, disposeCursor, onActivity, screenInfo, setViewVisible } from "./CursorOverlay";
+import { CursorOverlay, disposeCursor, onActivity, reportScreen, setViewVisible } from "./CursorOverlay";
 
 interface State {
   running: boolean;
+  enabled: boolean;
   url: string;
+  alt_url: string | null;
+  link_host: "name" | "ip";
   clients: number;
   sensitivity: number;
   error: string;
@@ -26,7 +29,7 @@ const setEnabled = callable<[enabled: boolean], State>("set_enabled");
 const regenerateToken = callable<[], State>("regenerate_token");
 const setSensitivity = callable<[value: number], void>("set_sensitivity");
 const viewReady = callable<[], void>("view_ready");
-const setScreen = callable<[width: number, height: number, scale: number], void>("set_screen");
+const setLinkHost = callable<[mode: string], State>("set_link_host");
 
 function Qr({ text }: { text: string }) {
   const qr = qrcode(0, "M");
@@ -46,9 +49,11 @@ function Content() {
 
   useEffect(() => {
     getState().then(setS);
+    // the server may still be starting by itself (it was left enabled): keep looking until it is up
+    const poll = setInterval(() => getState().then((n) => setS((p) => (p && p.running === n.running && p.error === n.error ? p : n))), 3000);
     const l = (n: number) => setS((p) => (p ? { ...p, clients: n } : p));
     const h = addEventListener<[n: number]>("rc_clients", l);
-    return () => removeEventListener("rc_clients", h);
+    return () => { clearInterval(poll); removeEventListener("rc_clients", h); };
   }, []);
 
   if (!s) return <PanelSection title="Remote Control">Loading…</PanelSection>;
@@ -59,10 +64,13 @@ function Content() {
         <PanelSectionRow>
           <ToggleField
             label="Enable"
-            description={s.running ? `${s.clients} device(s) connected` : "Server is off"}
-            checked={s.running}
+            description={
+              s.running ? `${s.clients} device(s) connected · starts automatically with the device`
+                : s.enabled ? "Starting…" : "Server is off"
+            }
+            checked={s.enabled}
             onChange={async (v) => {
-              if (v) { const { width, height, scale } = screenInfo(); await setScreen(width, height, scale); }
+              if (v) reportScreen();
               setS(await setEnabled(v));
             }}
           />
@@ -77,6 +85,7 @@ function Content() {
           <PanelSectionRow>
             <div style={{ fontSize: 11, wordBreak: "break-all", opacity: 0.8 }}>
               Scan with your phone camera (same Wi-Fi), or open:<br />{s.url}
+              {s.alt_url && <><br /><br />Or by {s.link_host === "name" ? "address" : "name"}:<br />{s.alt_url}</>}
             </div>
           </PanelSectionRow>
           <PanelSectionRow>
@@ -87,6 +96,16 @@ function Content() {
         </PanelSection>
       )}
       <PanelSection title="Settings">
+        {s.alt_url && (
+          <PanelSectionRow>
+            <ToggleField
+              label="Use IP address in link"
+              description="Only if your phone cannot open the .local name. A saved link then stops working when the device's IP changes."
+              checked={s.link_host === "ip"}
+              onChange={async (v) => setS(await setLinkHost(v ? "ip" : "name"))}
+            />
+          </PanelSectionRow>
+        )}
         <PanelSectionRow>
           <SliderField
             label="Pointer speed"
@@ -103,6 +122,8 @@ function Content() {
 export default definePlugin(() => {
   routerHook.addGlobalComponent("DeckyRemoteControlCursor", CursorOverlay);
   const listener = addEventListener<[down: boolean]>("rc_activity", () => onActivity());
+  let tries = 0;
+  const screenTimer = setInterval(() => { if (reportScreen() || ++tries > 20) clearInterval(screenTimer); }, 1000);
   const unwatchApp = watchRunningApp();
   const actionListener = addEventListener<[action: string]>("rc_action", runAction);
   const viewListener = addEventListener<[visible: boolean]>("rc_view", (visible) => {
@@ -120,6 +141,7 @@ export default definePlugin(() => {
       removeEventListener("rc_view", viewListener);
       removeEventListener("rc_action", actionListener);
       unwatchApp();
+      clearInterval(screenTimer);
       disposeCursor();
       routerHook.removeGlobalComponent("DeckyRemoteControlCursor");
     },

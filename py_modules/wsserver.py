@@ -3,11 +3,14 @@ import asyncio
 import base64
 import hashlib
 import json
+import os
 import struct
-from urllib.parse import urlsplit, parse_qs
+from urllib.parse import parse_qs, quote, urlsplit
 
 _GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 MAX_FRAME = 64 * 1024
+ICONS = {"/icon-192.png": "icon-192.png", "/icon-512.png": "icon-512.png",
+         "/apple-touch-icon.png": "apple-touch-icon.png"}
 
 
 async def read_frame(reader):
@@ -91,11 +94,24 @@ class Server:
             except Exception:
                 self.cursors.discard(w)
 
-    async def _http(self, writer, status, body=b"", ctype="text/plain"):
-        writer.write(f"HTTP/1.1 {status}\r\nContent-Type: {ctype}; charset=utf-8\r\n"
-                     f"Content-Length: {len(body)}\r\nCache-Control: no-store\r\n"
+    async def _http(self, writer, status, body=b"", ctype="text/plain", cache="no-store"):
+        charset = "" if ctype.startswith("image/") else "; charset=utf-8"
+        writer.write(f"HTTP/1.1 {status}\r\nContent-Type: {ctype}{charset}\r\n"
+                     f"Content-Length: {len(body)}\r\nCache-Control: {cache}\r\n"
                      f"Connection: close\r\n\r\n".encode() + body)
         await writer.drain()
+
+    def manifest(self, token):
+        """Web app manifest so a phone can keep the page as an app. The start URL carries the
+        token the manifest was requested with (the page links it with its own token)."""
+        return json.dumps({
+            "name": "Remote Control", "short_name": "Remote",
+            "description": "Touchpad and keyboard for your SteamOS device",
+            "start_url": "/?t=" + quote(token, safe=""), "scope": "/", "display": "standalone",
+            "background_color": "#0a0e15", "theme_color": "#0a0e15",
+            "icons": [{"src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+                      {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}],
+        }).encode()
 
     async def _handle(self, reader, writer):
         try:
@@ -111,6 +127,14 @@ class Server:
             elif method == "GET" and url.path in ("/", "/index.html"):
                 with open(self.index_path, "rb") as f:
                     await self._http(writer, "200 OK", f.read(), "text/html")
+            elif method == "GET" and url.path == "/manifest.webmanifest":
+                await self._http(writer, "200 OK", self.manifest(q.get("t", [""])[0]), "application/manifest+json")
+            elif method == "GET" and url.path in ICONS:
+                try:
+                    with open(os.path.join(os.path.dirname(self.index_path), ICONS[url.path]), "rb") as f:
+                        await self._http(writer, "200 OK", f.read(), "image/png", "public, max-age=86400")
+                except OSError:
+                    await self._http(writer, "404 Not Found", b"not found")
             else:
                 await self._http(writer, "404 Not Found", b"not found")
         except (asyncio.TimeoutError, asyncio.IncompleteReadError, ConnectionError,

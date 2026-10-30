@@ -2394,6 +2394,7 @@ const useUIComposition = DFL.findModuleChild((m) => {
 // (same technique as a picture-in-picture overlay). The view exists only while input is active.
 const IDLE_MS = 1700;
 const getCursorUrl = callable("get_state");
+const setScreen = callable("set_screen");
 const mainWindow = () => DFL.Router.WindowStore?.GamepadUIMainWindowInstance;
 const screenInfo = () => {
     const win = mainWindow()?.BrowserWindow;
@@ -2414,12 +2415,22 @@ function setViewVisible(visible) {
     viewHidden = !visible;
     browser?.SetVisible(visible);
 }
+// Tell the backend the screen size and scale: needed before input can be scaled correctly, and it
+// changes with resolution (docking, a different display)
+function reportScreen() {
+    const win = mainWindow()?.BrowserWindow;
+    if (!win || win.innerWidth < 100)
+        return false; // Steam's main window is not ready: do not report guesses
+    setScreen(win.innerWidth, win.innerHeight, win.devicePixelRatio || 1).catch(() => { });
+    return true;
+}
 function onActivity() {
     clearTimeout(hideTimer);
     hideTimer = setTimeout(() => { showing = false; listener?.(""); }, IDLE_MS);
     if (showing)
         return;
     showing = true;
+    reportScreen();
     getCursorUrl().then((s) => { if (showing)
         listener?.(cursorDataUrl(s.cursor_ws)); });
 }
@@ -2549,7 +2560,7 @@ const setEnabled = callable("set_enabled");
 const regenerateToken = callable("regenerate_token");
 const setSensitivity = callable("set_sensitivity");
 const viewReady = callable("view_ready");
-const setScreen = callable("set_screen");
+const setLinkHost = callable("set_link_host");
 function Qr({ text }) {
     const qr = qrcode(0, "M");
     qr.addData(text);
@@ -2561,23 +2572,27 @@ function Content() {
     const [s, setS] = SP_REACT.useState(null);
     SP_REACT.useEffect(() => {
         getState().then(setS);
+        // the server may still be starting by itself (it was left enabled): keep looking until it is up
+        const poll = setInterval(() => getState().then((n) => setS((p) => (p && p.running === n.running && p.error === n.error ? p : n))), 3000);
         const l = (n) => setS((p) => (p ? { ...p, clients: n } : p));
         const h = addEventListener("rc_clients", l);
-        return () => removeEventListener("rc_clients", h);
+        return () => { clearInterval(poll); removeEventListener("rc_clients", h); };
     }, []);
     if (!s)
         return SP_JSX.jsx(DFL.PanelSection, { title: "Remote Control", children: "Loading\u2026" });
-    return (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs(DFL.PanelSection, { title: "Remote Control", children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ToggleField, { label: "Enable", description: s.running ? `${s.clients} device(s) connected` : "Server is off", checked: s.running, onChange: async (v) => {
-                                if (v) {
-                                    const { width, height, scale } = screenInfo();
-                                    await setScreen(width, height, scale);
-                                }
+    return (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs(DFL.PanelSection, { title: "Remote Control", children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ToggleField, { label: "Enable", description: s.running ? `${s.clients} device(s) connected · starts automatically with the device`
+                                : s.enabled ? "Starting…" : "Server is off", checked: s.enabled, onChange: async (v) => {
+                                if (v)
+                                    reportScreen();
                                 setS(await setEnabled(v));
-                            } }) }), s.error && SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { color: "#f66" }, children: s.error }) })] }), s.running && (SP_JSX.jsxs(DFL.PanelSection, { title: "Connect", children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(Qr, { text: s.url }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: { fontSize: 11, wordBreak: "break-all", opacity: 0.8 }, children: ["Scan with your phone camera (same Wi-Fi), or open:", SP_JSX.jsx("br", {}), s.url] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: async () => setS(await regenerateToken()), children: "New link (disconnects devices)" }) })] })), SP_JSX.jsx(DFL.PanelSection, { title: "Settings", children: SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.SliderField, { label: "Pointer speed", min: 0.5, max: 3, step: 0.1, showValue: true, value: s.sensitivity, onChange: (v) => { setS({ ...s, sensitivity: v }); setSensitivity(v); } }) }) })] }));
+                            } }) }), s.error && SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { color: "#f66" }, children: s.error }) })] }), s.running && (SP_JSX.jsxs(DFL.PanelSection, { title: "Connect", children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(Qr, { text: s.url }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: { fontSize: 11, wordBreak: "break-all", opacity: 0.8 }, children: ["Scan with your phone camera (same Wi-Fi), or open:", SP_JSX.jsx("br", {}), s.url, s.alt_url && SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx("br", {}), SP_JSX.jsx("br", {}), "Or by ", s.link_host === "name" ? "address" : "name", ":", SP_JSX.jsx("br", {}), s.alt_url] })] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: async () => setS(await regenerateToken()), children: "New link (disconnects devices)" }) })] })), SP_JSX.jsxs(DFL.PanelSection, { title: "Settings", children: [s.alt_url && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ToggleField, { label: "Use IP address in link", description: "Only if your phone cannot open the .local name. A saved link then stops working when the device's IP changes.", checked: s.link_host === "ip", onChange: async (v) => setS(await setLinkHost(v ? "ip" : "name")) }) })), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.SliderField, { label: "Pointer speed", min: 0.5, max: 3, step: 0.1, showValue: true, value: s.sensitivity, onChange: (v) => { setS({ ...s, sensitivity: v }); setSensitivity(v); } }) })] })] }));
 }
 var index = definePlugin(() => {
     routerHook.addGlobalComponent("DeckyRemoteControlCursor", CursorOverlay);
     const listener = addEventListener("rc_activity", () => onActivity());
+    let tries = 0;
+    const screenTimer = setInterval(() => { if (reportScreen() || ++tries > 20)
+        clearInterval(screenTimer); }, 1000);
     const unwatchApp = watchRunningApp();
     const actionListener = addEventListener("rc_action", runAction);
     const viewListener = addEventListener("rc_view", (visible) => {
@@ -2595,6 +2610,7 @@ var index = definePlugin(() => {
             removeEventListener("rc_view", viewListener);
             removeEventListener("rc_action", actionListener);
             unwatchApp();
+            clearInterval(screenTimer);
             disposeCursor();
             routerHook.removeGlobalComponent("DeckyRemoteControlCursor");
         },

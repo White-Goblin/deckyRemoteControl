@@ -14,37 +14,25 @@ import decky
 sys.path.insert(0, os.path.join(decky.DECKY_PLUGIN_DIR, "py_modules"))
 
 import audio  # noqa: E402
+import netinfo  # noqa: E402
 import pointer_sync  # noqa: E402
+import store  # noqa: E402
 import uinput  # noqa: E402
 from wsserver import Server  # noqa: E402
 
 SETTINGS_FILE = os.path.join(decky.DECKY_PLUGIN_SETTINGS_DIR, "remote_control.json")
-DEFAULTS = {"port": 8765, "sensitivity": 1.0, "token": ""}
+DEFAULTS = {"port": 8765, "sensitivity": 1.0, "token": "", "enabled": False, "link_host": "name"}
 EMIT_INTERVAL = 1 / 60
 SYNC_INTERVAL = 0.08  # seconds between real-pointer checks while input flows
 SYNC_SNAP = 20  # device px of disagreement before the tracked position is replaced
-
-
-def lan_ip():
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(("10.255.255.255", 1))
-        return s.getsockname()[0]
-    except OSError:
-        return "127.0.0.1"
-    finally:
-        s.close()
+RETRY_DELAYS = (5, 10, 20, 30)  # seconds between automatic start attempts (boot-time readiness)
+XP_RETRY = 30  # seconds between attempts to open the X displays when they were not up yet
 
 
 class Plugin:
     async def _main(self):
         self.loop = asyncio.get_event_loop()
-        self.settings = dict(DEFAULTS)
-        try:
-            with open(SETTINGS_FILE) as f:
-                self.settings.update(json.load(f))
-        except (OSError, ValueError):
-            pass
+        self.settings = {**DEFAULTS, **store.load(SETTINGS_FILE)}
         if not self.settings["token"]:
             self.settings["token"] = secrets.token_urlsafe(9)
             self._save()
@@ -62,6 +50,8 @@ class Plugin:
         self.vol_pending = 0
         self.app_name = None  # None until the frontend reports; "" when no app runs
         self.xpointers = None
+        self.xp_tried = 0.0
+        self.start_task = None
         self.view_event = None
         self.press_lock = asyncio.Lock()
         self.scale = 1.0
@@ -69,19 +59,25 @@ class Plugin:
         self.last_emit = 0.0
         self.clients = 0
         self.error = ""
-        decky.logger.info("Remote Control loaded (server off until enabled)")
+        if self.settings["enabled"]:
+            decky.logger.info("Remote Control loaded (starting the server: it was left enabled)")
+            self.start_task = asyncio.ensure_future(self._autostart())
+        else:
+            decky.logger.info("Remote Control loaded (server off until enabled)")
 
     def _save(self):
-        os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
-        with open(SETTINGS_FILE, "w") as f:
-            json.dump(self.settings, f)
+        store.save(SETTINGS_FILE, self.settings)
 
     # ---- state exposed to the frontend ----
     def _state(self):
         port = self.settings["port"]
+        url, alt_url = netinfo.links(port, self.settings["token"], self.settings["link_host"])
         return {
             "running": self.server is not None,
-            "url": f"http://{lan_ip()}:{port}/?t={self.settings['token']}",
+            "enabled": self.settings["enabled"],
+            "url": url,
+            "alt_url": alt_url,
+            "link_host": self.settings["link_host"],
             "clients": self.clients,
             "sensitivity": self.settings["sensitivity"],
             "cursor_ws": f"ws://127.0.0.1:{port}/ws?t={self.settings['token']}&role=cursor",
@@ -91,29 +87,70 @@ class Plugin:
     async def get_state(self):
         return self._state()
 
-    async def set_enabled(self, enabled: bool):
-        self.error = ""
-        if enabled and self.server is None:
-            try:
-                self.pointer = uinput.Pointer()
-                try:
-                    self.xpointers = pointer_sync.XPointers()
-                except OSError as e:
-                    self.xpointers = None
-                    decky.logger.warning(f"pointer resync unavailable: {e}")
-                self.keyboard = uinput.Keyboard()
-                self.server = Server(
-                    os.path.join(decky.DECKY_PLUGIN_DIR, "web", "index.html"),
-                    lambda: self.settings["token"], self._on_message, self._on_clients)
-                await self.server.start(self.settings["port"])
-                self.pointer.move(-20000, -20000)  # known corner; tracking restarts at (0, 0)
-                self.x = self.y = 0.0
-            except Exception as e:  # noqa: BLE001
-                decky.logger.error(f"start failed: {e!r}")
-                self.error = f"Could not start: {e}"
-                await self._shutdown()
-        elif not enabled:
+    async def _start(self):
+        """Create the input devices and the server; True when running."""
+        if self.server is not None:
+            return True
+        try:
+            self.pointer = uinput.Pointer()
+            self.keyboard = uinput.Keyboard()
+            self.server = Server(
+                os.path.join(decky.DECKY_PLUGIN_DIR, "web", "index.html"),
+                lambda: self.settings["token"], self._on_message, self._on_clients)
+            await self.server.start(self.settings["port"])
+            self.pointer.move(-20000, -20000)  # known corner; tracking restarts at (0, 0)
+            self.x = self.y = 0.0
+            self.error = ""
+            self._open_xpointers()
+            return True
+        except Exception as e:  # noqa: BLE001
+            decky.logger.error(f"start failed: {e!r}")
+            self.error = f"Could not start: {e}"
             await self._shutdown()
+            return False
+
+    def _open_xpointers(self):
+        self.xp_tried = time.monotonic()
+        try:
+            self.xpointers = pointer_sync.XPointers()
+        except OSError as e:
+            self.xpointers = None
+            decky.logger.warning(f"pointer resync unavailable: {e}")
+
+    async def _autostart(self):
+        """The server was left on: bring it up, retrying while the system is still getting ready
+        (at boot /dev/uinput access, the displays or the network can lag behind Decky)."""
+        attempt = 0
+        while self.settings["enabled"] and self.server is None:
+            if await self._start():
+                decky.logger.info("server started automatically")
+                return
+            await asyncio.sleep(RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)])
+            attempt += 1
+
+    def _cancel_start(self):
+        if self.start_task and not self.start_task.done() and self.start_task is not asyncio.current_task():
+            self.start_task.cancel()
+        self.start_task = None
+
+    async def set_enabled(self, enabled: bool):
+        """The user's choice is saved, so the server comes back after reboots and updates."""
+        self._cancel_start()
+        self.error = ""
+        if enabled:
+            self.settings["enabled"] = True
+            if not await self._start():
+                self.settings["enabled"] = False  # the user saw it fail: do not retry behind their back
+        else:
+            self.settings["enabled"] = False
+            await self._shutdown()
+        self._save()
+        return self._state()
+
+    async def set_link_host(self, mode: str):
+        if mode in ("name", "ip"):
+            self.settings["link_host"] = mode
+            self._save()
         return self._state()
 
     async def regenerate_token(self):
@@ -133,6 +170,8 @@ class Plugin:
         moves in device pixels, so tracking is done there and divided by `scale` for drawing."""
         if width < 100 or height < 100 or scale < 0.5:
             return
+        if (int(width * scale), int(height * scale), float(scale)) != (self.width, self.height, self.scale):
+            decky.logger.info(f"screen: {width}x{height} css px at {scale:.2f}x")
         self.scale = float(scale)
         self.width, self.height = int(width * scale), int(height * scale)
         self.x = min(self.x, self.width - 1)
@@ -216,6 +255,8 @@ class Plugin:
 
     def _sync_begin(self):
         self.last_input = time.monotonic()
+        if self.xpointers is None and time.monotonic() - self.xp_tried > XP_RETRY:
+            self._open_xpointers()  # the displays were not up when the server started
         if self.xpointers is None or (self.sync_task and not self.sync_task.done()):
             return
         self.resync = pointer_sync.Resync(self.width, self.height)
@@ -332,7 +373,10 @@ class Plugin:
         self.clients = 0
 
     async def _unload(self):
+        # runtime stop only: the saved "enabled" choice is left alone so the server returns
+        self._cancel_start()
         await self._shutdown()
 
     async def _uninstall(self):
+        self._cancel_start()
         await self._shutdown()

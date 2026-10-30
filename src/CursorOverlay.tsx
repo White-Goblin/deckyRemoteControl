@@ -9,6 +9,7 @@ import { UIComposition, useUIComposition } from "./useUIComposition";
 const IDLE_MS = 1700;
 
 const getCursorUrl = callable<[], { cursor_ws: string }>("get_state");
+const setScreen = callable<[width: number, height: number, scale: number], void>("set_screen");
 
 export const mainWindow = (): any => (Router as any).WindowStore?.GamepadUIMainWindowInstance;
 
@@ -35,11 +36,21 @@ export function setViewVisible(visible: boolean) {
   browser?.SetVisible(visible);
 }
 
+// Tell the backend the screen size and scale: needed before input can be scaled correctly, and it
+// changes with resolution (docking, a different display)
+export function reportScreen(): boolean {
+  const win: Window | undefined = mainWindow()?.BrowserWindow;
+  if (!win || win.innerWidth < 100) return false; // Steam's main window is not ready: do not report guesses
+  setScreen(win.innerWidth, win.innerHeight, win.devicePixelRatio || 1).catch(() => {});
+  return true;
+}
+
 export function onActivity() {
   clearTimeout(hideTimer);
   hideTimer = setTimeout(() => { showing = false; listener?.(""); }, IDLE_MS);
   if (showing) return;
   showing = true;
+  reportScreen();
   getCursorUrl().then((s) => { if (showing) listener?.(cursorDataUrl(s.cursor_ws)); });
 }
 

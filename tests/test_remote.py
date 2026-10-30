@@ -2,7 +2,7 @@ import asyncio, base64, json, os, struct, sys, types, tempfile, importlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "py_modules"))
-import audio, pointer_sync, uinput, wsserver
+import audio, netinfo, pointer_sync, store, uinput, wsserver
 
 
 def test_char_map():
@@ -26,17 +26,13 @@ def _mask(payload):
 def test_end_to_end():
     tmp = tempfile.mkdtemp()
     events, calls = [], []
-    fake = types.ModuleType("decky")
-    fake.DECKY_PLUGIN_DIR = ROOT
-    fake.DECKY_PLUGIN_SETTINGS_DIR = tmp
-    fake.logger = types.SimpleNamespace(info=print, error=print, warning=print)
+    main = _load_main(tmp)
     plugin = []
     async def emit(*a):
         events.append(a)
         if a[0] == "rc_view" and not a[1]:  # the frontend would hide its view and confirm
             plugin[0].view_event.set()
-    fake.emit = emit
-    sys.modules["decky"] = fake
+    main.decky.emit = emit
 
     class FakePointer:
         def __init__(s): pass
@@ -48,8 +44,6 @@ def test_end_to_end():
         def tap(s, c, shift=False, ctrl=False): calls.append(("tap", c, shift))
         def close(s): pass
     uinput.Pointer, uinput.Keyboard = FakePointer, FakeKb
-    main = importlib.import_module("main")
-    main.SETTINGS_FILE = os.path.join(tmp, "s.json")
 
     async def run():
         p = main.Plugin()
@@ -176,3 +170,131 @@ def test_audio_falls_back_to_system_when_cec_call_fails():
             return "Volume: 0.50"
         return ""
     assert audio.Audio(runner).press("down") == "Volume 50%"
+
+
+# ---- persistence and stable links ----
+def _load_main(tmp):
+    if "decky" not in sys.modules:
+        sys.modules["decky"] = types.ModuleType("decky")
+    d = sys.modules["decky"]
+    d.DECKY_PLUGIN_DIR, d.DECKY_PLUGIN_SETTINGS_DIR = ROOT, tmp   # main.py reads these when imported
+    main = importlib.import_module("main")
+    d = main.decky
+    d.DECKY_PLUGIN_DIR, d.DECKY_PLUGIN_SETTINGS_DIR = ROOT, tmp
+    d.logger = types.SimpleNamespace(info=lambda *a: None, error=lambda *a: None, warning=lambda *a: None)
+    async def emit(*a): pass
+    d.emit = emit
+    main.SETTINGS_FILE = os.path.join(tmp, "s.json")
+    main.pointer_sync.XPointers = lambda: (_ for _ in ()).throw(OSError("no X"))
+
+    class Dev:
+        def __init__(s, *a, **k): pass
+        def move(s, *a): pass
+        def button(s, *a): pass
+        def scroll(s, *a): pass
+        def tap(s, *a, **k): pass
+        def close(s): pass
+    uinput.Pointer = uinput.Keyboard = Dev
+    return main
+
+
+def test_store_atomic_and_recovers_from_backup():
+    tmp = tempfile.mkdtemp(); path = os.path.join(tmp, "x.json")
+    store.save(path, {"token": "keepme", "n": 1})
+    store.save(path, {"token": "keepme", "n": 2})
+    assert sorted(os.listdir(tmp)) == ["x.json", "x.json.bak"]            # no stray temp file
+    open(path, "w").write('{"token": "ke')                                 # power cut mid-write
+    assert store.load(path)["token"] == "keepme"                           # recovered from the backup
+    assert store.load(os.path.join(tmp, "missing.json")) == {}
+
+
+def test_links_prefer_the_stable_name_with_an_ip_fallback():
+    assert netinfo.links(8765, "T", "name", ip="10.0.0.5", name="steam-machine", mdns=True) == (
+        "http://steam-machine.local:8765/?t=T", "http://10.0.0.5:8765/?t=T")
+    assert netinfo.links(8765, "T", "ip", ip="10.0.0.5", name="steam-machine", mdns=True) == (
+        "http://10.0.0.5:8765/?t=T", "http://steam-machine.local:8765/?t=T")
+    assert netinfo.links(8765, "T", "name", ip="10.0.0.5", name="steam-machine", mdns=False) == (
+        "http://10.0.0.5:8765/?t=T", None)                                 # no mDNS: only the IP
+
+
+def test_manifest_start_url_carries_the_token():
+    srv = wsserver.Server(os.path.join(ROOT, "web", "index.html"), lambda: "T", lambda m: None, lambda n: None)
+    m = json.loads(srv.manifest("a b&c"))
+    assert m["start_url"] == "/?t=a%20b%26c" and m["display"] == "standalone"
+    assert {i["src"] for i in m["icons"]} == {"/icon-192.png", "/icon-512.png"}
+    for name in ("icon-192.png", "icon-512.png", "apple-touch-icon.png"):
+        assert open(os.path.join(ROOT, "web", name), "rb").read(8) == b"\x89PNG\r\n\x1a\n"
+
+
+def test_enabled_choice_survives_restarts_and_keeps_the_token():
+    async def run():
+        tmp = tempfile.mkdtemp(); main = _load_main(tmp)
+        p1 = main.Plugin(); await p1._main()
+        p1.settings["port"] = 18811; p1._save()
+        token = p1.settings["token"]
+        assert (await p1.set_enabled(True))["running"] and store.load(main.SETTINGS_FILE)["enabled"] is True
+        await p1._unload()                                                  # Decky stopping: a runtime stop only
+        assert store.load(main.SETTINGS_FILE)["enabled"] is True
+        p2 = main.Plugin(); await p2._main()                                # "reboot": comes back by itself
+        await asyncio.sleep(0.3)
+        assert p2.server is not None and p2.settings["token"] == token and p2._state()["running"]
+        assert (await p2.set_enabled(False))["running"] is False
+        await p2._unload()
+        p3 = main.Plugin(); await p3._main(); await asyncio.sleep(0.2)
+        assert p3.server is None and p3.settings["enabled"] is False        # off stays off
+        await p3._unload()
+    asyncio.run(run())
+
+
+def test_autostart_retries_until_the_system_is_ready():
+    async def run():
+        tmp = tempfile.mkdtemp(); main = _load_main(tmp)
+        store.save(main.SETTINGS_FILE, {"enabled": True, "port": 18812, "token": "T"})
+        main.RETRY_DELAYS = (0.05,)
+        attempts = {"n": 0}
+        real = uinput.Pointer
+        class Flaky(real):
+            def __init__(s, *a, **k):
+                attempts["n"] += 1
+                if attempts["n"] <= 2:
+                    raise PermissionError("/dev/uinput not accessible yet")
+        uinput.Pointer = Flaky
+        p = main.Plugin(); await p._main()
+        await asyncio.sleep(0.05)
+        assert p.server is None and p.settings["enabled"] is True and "Could not start" in p.error   # failing, still wanted
+        await asyncio.sleep(0.4)
+        assert p.server is not None and attempts["n"] == 3 and p.error == ""
+        await p._unload()
+    asyncio.run(run())
+
+
+def test_failed_toggle_does_not_stay_enabled():
+    async def run():
+        tmp = tempfile.mkdtemp(); main = _load_main(tmp)
+        class Broken:
+            def __init__(s, *a, **k): raise PermissionError("denied")
+        uinput.Pointer = Broken
+        p = main.Plugin(); await p._main(); p.settings["port"] = 18813
+        st = await p.set_enabled(True)
+        assert st["running"] is False and st["enabled"] is False and "denied" in st["error"]
+        assert store.load(main.SETTINGS_FILE)["enabled"] is False
+    asyncio.run(run())
+
+
+def test_http_routes_manifest_icons_and_404():
+    async def run():
+        tmp = tempfile.mkdtemp(); main = _load_main(tmp)
+        p = main.Plugin(); await p._main(); p.settings["port"] = 18814
+        await p.set_enabled(True)
+        async def get(path):
+            r, w = await asyncio.open_connection("127.0.0.1", 18814)
+            w.write(f"GET {path} HTTP/1.1\r\nHost: x\r\n\r\n".encode()); data = await r.read(); w.close()
+            return data.split(b"\r\n\r\n", 1)
+        head, body = await get("/manifest.webmanifest?t=abc")
+        assert b"200" in head and b"application/manifest+json" in head and json.loads(body)["start_url"] == "/?t=abc"
+        head, body = await get("/icon-192.png")
+        assert b"image/png" in head and body[:4] == b"\x89PNG" and b"max-age" in head
+        assert b"404" in (await get("/nope"))[0]
+        assert b"404" in (await get("/../main.py"))[0]
+        await p._unload()
+    asyncio.run(run())

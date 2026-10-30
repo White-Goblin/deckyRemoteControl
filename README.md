@@ -8,6 +8,12 @@ Use a phone or tablet as a touchpad and keyboard for your SteamOS device. Scan a
 - Buttons under the touchpad: Steam menu and Quick Access (bottom left, each toggles its menu), arrow keys in a cross (bottom middle, hold to repeat), Esc, Enter and the keyboard (bottom right). **Quit app** sits alone at the top right and needs a second tap within 3 seconds to close the running app
 - Idle cost is zero: the server only runs while the toggle is on; no overlay exists unless input is arriving
 
+## Persistence and links
+- **Stays on:** turn the server on once and it comes back by itself after reboots, Decky restarts and plugin updates (the choice is saved). If the system is not ready yet at boot, it keeps retrying in the background. Turning it off in the panel also sticks.
+- **The link does not change.** It contains a token that is generated once and kept in the plugin's settings (outside the plugin folder, so updates keep it). Only the panel's **New link** button replaces it, and then every saved link stops working. Keep the plugin's name ("Remote Control") unchanged, because the settings folder is named after it.
+- **Name, not address:** the link uses the device's network name (`http://<hostname>.local:8765/...`) so it keeps working when the device's IP address changes. The panel also shows the IP form as a fallback, and a switch to use the IP form in the link if your phone cannot open `.local` names (some older Android versions).
+- **Saving it as an app:** open the link on your phone and use *Add to Home Screen*. The page has an icon and a web app manifest. iOS then opens it full screen like an app. On Android the page is plain HTTP, so Chrome offers a shortcut that opens in the browser instead of installing it (installing needs HTTPS).
+
 ## Install (Decky developer mode)
 1. Build the zip: `./scripts/package.sh` (needs node + pnpm 9), or download it from Releases.
 2. Decky settings → Developer → *Install plugin from ZIP* (or unzip into `~/homebrew/plugins/`), then restart Decky: `sudo systemctl restart plugin_loader`.
