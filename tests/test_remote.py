@@ -2,7 +2,7 @@ import asyncio, base64, json, os, struct, sys, types, tempfile, importlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "py_modules"))
-import pointer_sync, uinput, wsserver
+import audio, pointer_sync, uinput, wsserver
 
 
 def test_char_map():
@@ -112,3 +112,55 @@ def test_resync_ignores_flipping_stale_display_and_drops_dead_live():
     for _ in range(3):                                                    # :1 stops following us
         out = r.update({":0": (3839, 2159), ":1": (508, 508)}, (8, 8))
     assert r.live is None and out is None
+
+
+def _audio(responses):
+    calls = []
+    def runner(cmd):
+        calls.append(cmd)
+        for key, out in responses.items():
+            if key in " ".join(cmd):
+                if isinstance(out, Exception):
+                    raise out
+                return out
+        return ""
+    return audio.Audio(runner), calls
+
+
+def test_audio_cec_when_hdmi_and_active():
+    a, calls = _audio({"wpctl inspect": 'node.name = "alsa_output.pci.hdmi-stereo"',
+                       "Active": "b true", "AudioLogicalAddress": "y 5"})
+    assert a.press("up") == "Volume up"
+    assert calls[-1][:5] == ["busctl", "--user", "call", audio.CEC_BUS, audio.CEC_PATH]
+    assert calls[-1][-3:] == ["VolumeUp", "y", "5"]
+    assert a.press("mute") == "Mute toggled" and calls[-1][-3] == "Mute"
+
+
+def test_audio_system_volume_and_unmute():
+    a, calls = _audio({"wpctl inspect": 'node.name = "alsa_output.usb-dac"', "get-volume": "Volume: 0.65"})
+    assert a.press("up") == "Volume 65%"
+    assert ["wpctl", "set-volume", "-l", "1.0", audio.SINK, "5%+"] in calls
+    a, calls = _audio({"wpctl inspect": "", "get-volume": "Volume: 0.40 [MUTED]"})
+    assert a.press("mute") == "Muted"
+    assert a.press("down") == "Volume 40%" and ["wpctl", "set-mute", audio.SINK, "0"] in calls
+
+
+def test_audio_falls_back_to_system_when_cec_call_fails():
+    state = {"cec": True}
+    calls = []
+    def runner(cmd):
+        calls.append(cmd)
+        text = " ".join(cmd)
+        if "wpctl inspect" in text:
+            return 'node.name = "alsa_output.hdmi"'
+        if "Active" in text:
+            return "b true" if state["cec"] else "b false"
+        if "AudioLogicalAddress" in text:
+            return "y 5"
+        if "call" in text:
+            state["cec"] = False
+            raise RuntimeError("cec gone")
+        if "get-volume" in text:
+            return "Volume: 0.50"
+        return ""
+    assert audio.Audio(runner).press("down") == "Volume 50%"

@@ -13,6 +13,7 @@ import decky
 
 sys.path.insert(0, os.path.join(decky.DECKY_PLUGIN_DIR, "py_modules"))
 
+import audio  # noqa: E402
 import pointer_sync  # noqa: E402
 import uinput  # noqa: E402
 from wsserver import Server  # noqa: E402
@@ -56,6 +57,9 @@ class Plugin:
         self.last_input = 0.0
         self.sync_task = None
         self.resync = None
+        self.audio = audio.Audio()
+        self.vol_lock = asyncio.Lock()
+        self.vol_pending = 0
         self.xpointers = None
         self.view_event = None
         self.press_lock = asyncio.Lock()
@@ -160,8 +164,22 @@ class Plugin:
 
     async def action_result(self, message: str):
         """The frontend reports what an action did; show it on the phone."""
+        self._toast(message)
+
+    def _toast(self, message):
         if self.server:
             self.server.broadcast_clients(json.dumps({"t": "toast", "m": str(message)[:80]}))
+
+    async def _volume(self, action):
+        try:
+            async with self.vol_lock:
+                message = await self.loop.run_in_executor(None, self.audio.press, action)
+            self._toast(message)
+        except Exception as e:  # noqa: BLE001
+            decky.logger.warning(f"volume {action} failed: {e!r}")
+            self._toast("Volume control unavailable")
+        finally:
+            self.vol_pending -= 1
 
     async def view_ready(self):
         if self.view_event:
@@ -251,6 +269,10 @@ class Plugin:
             self._activity(force=True)
         elif t == "k":
             self._type(str(m.get("text", ""))[:2000])
+        elif t == "vol":
+            if m.get("a") in ("up", "down", "mute") and self.vol_pending < 3:
+                self.vol_pending += 1
+                asyncio.ensure_future(self._volume(m["a"]))
         elif t == "act":
             if m.get("a") in ("steam", "qam", "quit"):
                 asyncio.ensure_future(decky.emit("rc_action", m["a"]))
