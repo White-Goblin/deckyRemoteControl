@@ -447,3 +447,37 @@ def test_launch_diagnostics_are_logged_and_head_works():
         assert "name lookup 3, connect 5, first byte 7, page ready 120, socket open 480, home-screen app" in out
         await p._unload()
     asyncio.run(run())
+
+
+def test_typing_keeps_order_across_helpers_and_keys_and_leaves_no_processes():
+    """Accented characters go through xdotool; they must land in order, before a following Enter, and the
+    helper must be waited for (no zombies) and aimed at the focused display."""
+    async def run():
+        tmp = tempfile.mkdtemp(); main = _load_main(tmp)
+        log = []
+        class Kb:
+            def tap(s, code, shift=False, ctrl=False): log.append(("tap", code, shift))
+            def close(s): pass
+        uinput.Keyboard = Kb
+        real_which, real_run = main.shutil.which, main.subprocess.run
+        calls = []
+        def fake_run(cmd, **kw):
+            import time as _t; _t.sleep(0.05)                                 # a slow helper: order must still hold
+            calls.append((cmd, kw)); log.append(("xdotool", cmd[-1]))
+        main.shutil.which = lambda n: "/usr/bin/xdotool"; main.subprocess.run = fake_run
+        try:
+            p = main.Plugin(); await p._main(); p.settings["port"] = 18816
+            await p.set_enabled(True)
+            p.resync = types.SimpleNamespace(live=":1")                       # an app on the second display has focus
+            p._on_message({"t": "k", "text": "ca\u00e9\x01 b"})               # control characters are skipped
+            p._on_message({"t": "key", "k": "Enter"})                          # sent right after, must not overtake the accent
+            await asyncio.sleep(0.4)
+        finally:
+            main.shutil.which, main.subprocess.run = real_which, real_run
+        order = [("x:" + k[1]) if k[0] == "xdotool" else "tap" for k in log]
+        assert order == ["tap", "tap", "x:\u00e9", "tap", "tap", "tap"], order   # c, a, accent, space, b, Enter
+        cmd, kw = calls[0]
+        assert cmd == ["xdotool", "type", "--clearmodifiers", "--", "\u00e9"] and kw["timeout"] == 2
+        assert kw["env"]["DISPLAY"] == ":1"
+        await p._unload()
+    asyncio.run(run())

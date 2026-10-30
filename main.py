@@ -1,4 +1,5 @@
 import asyncio
+import concurrent.futures
 import json
 import math
 import os
@@ -46,6 +47,8 @@ class Plugin:
         self.sync_task = None
         self.resync = None
         self.audio = audio.Audio()
+        # one worker thread keeps every keyboard action in order and keeps slow helpers off the event loop
+        self.kb_worker = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="rc-keys")
         self.vol_lock = asyncio.Lock()
         self.vol_pending = 0
         self.app_name = None  # None until the frontend reports; "" when no app runs
@@ -326,7 +329,7 @@ class Plugin:
             p.scroll(int(m.get("dy", 0)), int(m.get("dx", 0)))
             self._activity(force=True)
         elif t == "k":
-            self._type(str(m.get("text", ""))[:2000])
+            self.kb_worker.submit(self._type, str(m.get("text", ""))[:2000])
         elif t == "vol":
             if m.get("a") in ("up", "down", "mute") and self.vol_pending < 3:
                 self.vol_pending += 1
@@ -341,29 +344,45 @@ class Plugin:
         elif t == "key":
             code = uinput.KEY.get(m.get("k"))
             if code:
-                self.keyboard.tap(code)
+                self.kb_worker.submit(self._tap, code)
+
+    def _tap(self, code, **mods):
+        kb = self.keyboard
+        if kb is not None:
+            try:
+                kb.tap(code, **mods)
+            except OSError as e:  # the device was closed while this was queued
+                decky.logger.warning(f"key dropped: {e!r}")
 
     def _type(self, text):
-        kb = self.keyboard
+        """Runs on the keyboard worker, so characters (and keys sent after them) stay in order."""
         for ch in text:
             km = uinput.char_to_key(ch)
             if km:
-                kb.tap(km[0], shift=km[1])
+                self._tap(km[0], shift=km[1])
+            elif ch.isascii():
+                continue  # control characters have no key
             else:
                 self._type_unicode(ch)
 
+    def _focused_display(self):
+        """The X display of the window that has focus (the one following the pointer), else :0."""
+        return getattr(self.resync, "live", None) or os.environ.get("DISPLAY") or ":0"
+
     def _type_unicode(self, ch):
         if shutil.which("xdotool"):
-            env = dict(os.environ, DISPLAY=os.environ.get("DISPLAY", ":0"))
-            subprocess.Popen(["xdotool", "type", "--clearmodifiers", ch], env=env,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:  # waited for, so the character lands before the next one and no zombie is left behind
+                subprocess.run(["xdotool", "type", "--clearmodifiers", "--", ch],
+                               env=dict(os.environ, DISPLAY=self._focused_display()),
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+            except (OSError, subprocess.SubprocessError) as e:
+                decky.logger.warning(f"could not type {ch!r}: {e!r}")
             return
         # GTK/IBus style Ctrl+Shift+U hex entry
-        kb = self.keyboard
-        kb.tap(uinput.char_to_key("u")[0], shift=True, ctrl=True)
+        self._tap(uinput.char_to_key("u")[0], shift=True, ctrl=True)
         for h in format(ord(ch), "x"):
-            kb.tap(uinput.char_to_key(h)[0])
-        kb.tap(uinput.KEY["Space"])
+            self._tap(uinput.char_to_key(h)[0])
+        self._tap(uinput.KEY["Space"])
 
     async def _shutdown(self):
         if self.server:
@@ -385,6 +404,7 @@ class Plugin:
         # runtime stop only: the saved "enabled" choice is left alone so the server returns
         self._cancel_start()
         await self._shutdown()
+        self.kb_worker.shutdown(wait=False, cancel_futures=True)
 
     async def _uninstall(self):
         self._cancel_start()

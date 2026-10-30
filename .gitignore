@@ -60,7 +60,7 @@ AGENTS.md
 CLAUDE.md
 .claude/
 .vscode/
-assets/
+assets/logo.png
 py_modules/.keep
 scripts/deploy.sh
 scripts/device-test.sh
