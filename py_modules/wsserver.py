@@ -7,7 +7,6 @@ import json
 import os
 import re
 import struct
-import time
 from urllib.parse import parse_qs, urlsplit
 
 _GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -63,15 +62,13 @@ def make_frame(op, payload=b""):
 
 
 class Server:
-    def __init__(self, index_html_path, get_token, on_message, on_clients, log=None):
+    def __init__(self, index_html_path, get_token, on_message, on_clients):
         self.index_path = index_html_path
         self.get_token = get_token
         self.on_message = on_message
         self.on_clients = on_clients
-        self.log = log or (lambda msg: None)
         self.clients = set()
         self.cursors = set()
-        self.pages = {}  # peer -> when it was last served the page, to time its socket
         self._server = None
 
     async def start(self, port):
@@ -115,13 +112,6 @@ class Server:
         await writer.drain()
 
     @staticmethod
-    def client_kind(headers):
-        """Roughly what is connecting. A saved iOS home-screen app sends the same User-Agent as Safari,
-        so only the phone's own timing report (standalone or not) can tell those apart."""
-        ua = headers.get("user-agent", "")
-        return "iOS" if "iPhone" in ua or "iPad" in ua else "other"
-
-    @staticmethod
     def manifest():
         """Web app manifest so a phone can keep the page as an app. Everything is relative to the
         manifest's own URL, so the saved start URL contains the key."""
@@ -148,7 +138,6 @@ class Server:
             q = parse_qs(url.query)
             m = KEY_PATH.match(url.path)
             if not (m and self._valid(m.group(1))):
-                self.log(f"http: {url.path} has no valid key in it")
                 await self._http(writer, "403 Forbidden", BAD_LINK.encode(), "text/html")
                 return
             if m.group(2) is None:  # /<key> -> /<key>/ so the page's relative links resolve
@@ -157,13 +146,10 @@ class Server:
                 await writer.drain()
                 return
             path = m.group(2)
-            peer = (writer.get_extra_info("peername") or ("?",))[0]
             head = method == "HEAD"
             if path == "/ws" and headers.get("upgrade", "").lower() == "websocket":
-                await self._ws(reader, writer, headers, q, peer)
+                await self._ws(reader, writer, headers, q)
             elif method in ("GET", "HEAD") and path in ("/", "/index.html"):
-                self.pages[peer] = time.monotonic()
-                self.log(f"page for {peer} ({self.client_kind(headers)}), reached via {headers.get('host', '?')}")
                 with open(self.index_path, "rb") as f:
                     await self._http(writer, "200 OK", f.read(), "text/html", head=head)
             elif method in ("GET", "HEAD") and path == "/manifest.webmanifest":
@@ -186,7 +172,7 @@ class Server:
             except Exception:
                 pass
 
-    async def _ws(self, reader, writer, headers, q, peer="?"):
+    async def _ws(self, reader, writer, headers, q):
         key = headers.get("sec-websocket-key", "").encode()
         accept = base64.b64encode(hashlib.sha1(key + _GUID).digest()).decode()
         writer.write(("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
@@ -202,8 +188,6 @@ class Server:
             finally:
                 self.cursors.discard(writer)
             return
-        served = self.pages.pop(peer, None)
-        self.log(f"socket open for {peer}" + (f", {round((time.monotonic() - served) * 1000)} ms after its page was served" if served else ""))
         self.clients.add(writer)
         self.on_clients(len(self.clients))
         try:

@@ -412,39 +412,23 @@ async def _ws_status(port, path):
     return line
 
 
-def test_launch_diagnostics_are_logged_and_head_works():
+def test_head_requests_return_headers_only():
     async def run():
         tmp = tempfile.mkdtemp(); main = _load_main(tmp)
-        lines = []
-        main.decky.logger = types.SimpleNamespace(info=lines.append, error=lines.append, warning=lines.append)
         p = main.Plugin(); await p._main(); p.settings["port"] = 18815
         await p.set_enabled(True)
         k = p.settings["token"]
-        ua_app = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"
-        ua_safari = ua_app + " Version/17.0 Safari/604.1"
-        async def req(method, path, ua="curl"):
+        async def req(method, path):
             r, w = await asyncio.open_connection("127.0.0.1", 18815)
-            w.write(f"{method} {path} HTTP/1.1\r\nHost: steam-machine.local:18815\r\nUser-Agent: {ua}\r\n\r\n".encode())
+            w.write(f"{method} {path} HTTP/1.1\r\nHost: x\r\n\r\n".encode())
             data = await r.read(); w.close()
             head, _, body = data.partition(b"\r\n\r\n")
             return head, body
         head, body = await req("HEAD", f"/{k}/")
         assert b"200" in head and b"Content-Length: " in head and body == b""      # headers only
         assert not (await req("HEAD", f"/{k}/icon-192.png"))[1]
-        await req("GET", f"/{k}/", ua_app)
-        await req("GET", f"/{k}/", ua_safari)
-        text = "\n".join(map(str, lines))
-        assert "(iOS), reached via steam-machine.local:18815" in text and "(other)" in text   # which address it used
-        # the socket log says how long after its page the phone connected
-        lines.clear()
-        assert b"101" in await _ws_status(18815, f"/{k}/ws")
-        assert "socket open for 127.0.0.1" in "\n".join(map(str, lines))
-        # the phone reports its own timing; it is logged in readable form, junk is ignored
-        lines.clear()
-        p._on_message({"t": "timing", "dns": 3, "connect": 5, "ttfb": 7, "dom": 120, "wsOpen": 480, "standalone": True})
-        p._on_message({"t": "timing", "dns": "x", "wsOpen": None})
-        out = "\n".join(map(str, lines))
-        assert "name lookup 3, connect 5, first byte 7, page ready 120, socket open 480, home-screen app" in out
+        head, body = await req("GET", f"/{k}/")
+        assert b"200" in head and b'id="pad"' in body                              # GET still has the page
         await p._unload()
     asyncio.run(run())
 

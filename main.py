@@ -99,7 +99,7 @@ class Plugin:
             self.keyboard = uinput.Keyboard()
             self.server = Server(
                 os.path.join(decky.DECKY_PLUGIN_DIR, "web", "index.html"),
-                lambda: self.settings["token"], self._on_message, self._on_clients, decky.logger.info)
+                lambda: self.settings["token"], self._on_message, self._on_clients)
             await self.server.start(self.settings["port"])
             self.pointer.move(-20000, -20000)  # known corner; tracking restarts at (0, 0)
             self.x = self.y = 0.0
@@ -169,8 +169,6 @@ class Plugin:
         moves in device pixels, so tracking is done there and divided by `scale` for drawing."""
         if width < 100 or height < 100 or scale < 0.5:
             return
-        if (int(width * scale), int(height * scale), float(scale)) != (self.width, self.height, self.scale):
-            decky.logger.info(f"screen: {width}x{height} css px at {scale:.2f}x")
         self.scale = float(scale)
         self.width, self.height = int(width * scale), int(height * scale)
         self.x = min(self.x, self.width - 1)
@@ -213,17 +211,6 @@ class Plugin:
     def _push_app(self):
         if self.server and self.app_name is not None:
             self.server.broadcast_clients(json.dumps({"t": "app", "name": self.app_name}))
-
-    @staticmethod
-    def _log_timing(m):
-        """The phone reports how its page load went, so a slow launch can be traced to a step."""
-        n = {k: int(m[k]) for k in ("dns", "connect", "ttfb", "dom", "wsOpen") if isinstance(m.get(k), (int, float))}
-        decky.logger.info(
-            "phone timing (ms since its page started): "
-            + ", ".join(f"{label} {n[k]}" for label, k in (("name lookup", "dns"), ("connect", "connect"),
-                                                          ("first byte", "ttfb"), ("page ready", "dom"),
-                                                          ("socket open", "wsOpen")) if k in n)
-            + (", home-screen app" if m.get("standalone") else ", browser tab"))
 
     def _toast(self, message):
         if self.server:
@@ -283,7 +270,6 @@ class Plugin:
                 sent, self.sent_x, self.sent_y = (self.sent_x, self.sent_y), 0, 0
                 real = self.resync.update(self.xpointers.read(), sent)
                 if real and (abs(real[0] - self.x) > SYNC_SNAP or abs(real[1] - self.y) > SYNC_SNAP):
-                    decky.logger.info(f"resync: tracked ({self.x:.0f},{self.y:.0f}) -> real {real}")
                     self.x = float(min(max(real[0], 0), self.width - 1))
                     self.y = float(min(max(real[1], 0), self.height - 1))
                     self._activity(force=True)
@@ -336,8 +322,6 @@ class Plugin:
                 asyncio.ensure_future(self._volume(m["a"]))
         elif t == "hello":
             self._push_app()
-        elif t == "timing":
-            self._log_timing(m)
         elif t == "act":
             if m.get("a") in ("steam", "qam", "quit"):
                 asyncio.ensure_future(decky.emit("rc_action", m["a"]))
