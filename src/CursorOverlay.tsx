@@ -69,8 +69,27 @@ const CursorView = ({ url }: { url: string }) => {
   return null;
 };
 
+// Side menus are raised above views that already exist when they open, so while the cursor is
+// showing, recreate its view whenever the open menu changes (a new view is created on top).
+const POLL_MS = 150;
+const RECREATE_AT_MS = [0, 400, 1000]; // the menu is raised partway through its open animation
+const openMenu = () => mainWindow()?.MenuStore?.GetOpenSideMenu?.();
+
 export const CursorOverlay = () => {
   const [url, setUrl] = useState("");
+  const [generation, setGeneration] = useState(0);
   useEffect(() => { listener = setUrl; return () => { listener = null; }; }, []);
-  return url ? <CursorView url={url} /> : null;
+  useEffect(() => {
+    if (!url) return;
+    let last = openMenu();
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const poll = setInterval(() => {
+      const now = openMenu();
+      if (now === last) return;
+      last = now;
+      RECREATE_AT_MS.forEach((ms) => timers.push(setTimeout(() => setGeneration((g) => g + 1), ms)));
+    }, POLL_MS);
+    return () => { clearInterval(poll); timers.forEach(clearTimeout); };
+  }, [url]);
+  return url ? <CursorView key={generation} url={url} /> : null;
 };

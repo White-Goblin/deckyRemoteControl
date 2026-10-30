@@ -13,12 +13,15 @@ import decky
 
 sys.path.insert(0, os.path.join(decky.DECKY_PLUGIN_DIR, "py_modules"))
 
+import pointer_sync  # noqa: E402
 import uinput  # noqa: E402
 from wsserver import Server  # noqa: E402
 
 SETTINGS_FILE = os.path.join(decky.DECKY_PLUGIN_SETTINGS_DIR, "remote_control.json")
 DEFAULTS = {"port": 8765, "sensitivity": 1.0, "token": ""}
 EMIT_INTERVAL = 1 / 60
+SYNC_INTERVAL = 0.08  # seconds between real-pointer checks while input flows
+SYNC_SNAP = 20  # device px of disagreement before the tracked position is replaced
 
 
 def lan_ip():
@@ -49,6 +52,11 @@ class Plugin:
         self.width, self.height = 1280, 800
         self.x, self.y = self.width / 2, self.height / 2
         self.fx = self.fy = 0.0
+        self.sent_x = self.sent_y = 0
+        self.last_input = 0.0
+        self.sync_task = None
+        self.resync = None
+        self.xpointers = None
         self.view_event = None
         self.press_lock = asyncio.Lock()
         self.scale = 1.0
@@ -83,6 +91,11 @@ class Plugin:
         if enabled and self.server is None:
             try:
                 self.pointer = uinput.Pointer()
+                try:
+                    self.xpointers = pointer_sync.XPointers()
+                except OSError as e:
+                    self.xpointers = None
+                    decky.logger.warning(f"pointer resync unavailable: {e}")
                 self.keyboard = uinput.Keyboard()
                 self.server = Server(
                     os.path.join(decky.DECKY_PLUGIN_DIR, "web", "index.html"),
@@ -168,6 +181,31 @@ class Plugin:
             await self._hide_view(False)
             self._activity(down=True, force=True)
 
+    def _sync_begin(self):
+        self.last_input = time.monotonic()
+        if self.xpointers is None or (self.sync_task and not self.sync_task.done()):
+            return
+        self.resync = pointer_sync.Resync(self.width, self.height)
+        self.resync.begin(self.xpointers.read())
+        self.sent_x = self.sent_y = 0
+        self.sync_task = asyncio.ensure_future(self._sync_loop())
+
+    async def _sync_loop(self):
+        """While input is flowing, follow the real pointer (moved by other devices or by focus
+        changes) so the drawn cursor matches it."""
+        try:
+            while time.monotonic() - self.last_input < 2.0 and self.server:
+                await asyncio.sleep(SYNC_INTERVAL)
+                sent, self.sent_x, self.sent_y = (self.sent_x, self.sent_y), 0, 0
+                real = self.resync.update(self.xpointers.read(), sent)
+                if real and (abs(real[0] - self.x) > SYNC_SNAP or abs(real[1] - self.y) > SYNC_SNAP):
+                    decky.logger.info(f"resync: tracked ({self.x:.0f},{self.y:.0f}) -> real {real}")
+                    self.x = float(min(max(real[0], 0), self.width - 1))
+                    self.y = float(min(max(real[1], 0), self.height - 1))
+                    self._activity(force=True)
+        except Exception as e:  # noqa: BLE001
+            decky.logger.error(f"resync error: {e!r}")
+
     def _rel(self, dx, dy):
         """Relative move with sub-pixel carry so tracking matches what is injected."""
         self.fx += dx
@@ -176,6 +214,8 @@ class Plugin:
         self.fx -= ix
         self.fy -= iy
         self.pointer.move(ix, iy)
+        self.sent_x += ix
+        self.sent_y += iy
 
     def _on_message(self, m):
         try:
@@ -189,6 +229,7 @@ class Plugin:
         if p is None:
             return
         if t == "m":
+            self._sync_begin()
             dx, dy = float(m.get("dx", 0)), float(m.get("dy", 0))
             mag = math.hypot(dx, dy)
             gain = self.settings["sensitivity"] * (1 + 0.05 * min(mag, 30)) * self.scale
@@ -243,6 +284,9 @@ class Plugin:
                 except OSError:
                     pass
         self.pointer = self.keyboard = None
+        if self.sync_task:
+            self.sync_task.cancel()
+        self.xpointers = None
         self.clients = 0
 
     async def _unload(self):

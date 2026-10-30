@@ -16,6 +16,7 @@ Use a phone or tablet as a touchpad and keyboard for your SteamOS device. Scan a
 Python backend (stdlib only) serves the touch page + a WebSocket and injects input through `/dev/uinput` (a standard relative mouse + keyboard); no root is needed on SteamOS, where the logged-in user can open `/dev/uinput`. The URL contains a random token; "New link" revokes it.
 
 ## Limitations
+- The drawn cursor follows the real pointer: it is resynced from the X server of whichever window has focus while you touch the phone. While Quick Access has focus it cannot be read, so it relies on counting your moves until focus returns.
 - The cursor is drawn in its own Steam browser view (above menus and games). That view would swallow clicks, so it is hidden for a moment while a tap happens (a brief flicker).
 - Characters outside ASCII use `xdotool` if installed, otherwise Ctrl+Shift+U entry (works in GTK apps only).
 - Traffic is plain HTTP/WS on your LAN; use it on trusted networks.

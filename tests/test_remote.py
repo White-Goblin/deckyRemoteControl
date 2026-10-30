@@ -2,7 +2,7 @@ import asyncio, base64, json, os, struct, sys, types, tempfile, importlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "py_modules"))
-import uinput, wsserver
+import pointer_sync, uinput, wsserver
 
 
 def test_char_map():
@@ -90,3 +90,25 @@ def test_end_to_end():
         w.close()
         await p._unload()
     asyncio.run(run())
+
+
+def test_resync_picks_the_live_display():
+    r = pointer_sync.Resync(3840, 2160)
+    # :0 is stale (center), :1 follows the real pointer and was moved by another device first
+    r.begin({":0": (1920, 1080), ":1": (638, 480)})
+    real = r.update({":0": (1920, 1080), ":1": (1100, 700)}, (10, 5))   # moved +462,+220 by someone else too
+    assert real is None                                             # inconsistent with our own move: not trusted yet
+    real = r.update({":0": (1920, 1080), ":1": (1110, 705)}, (10, 5))   # now responds to exactly our move
+    assert real == (1110, 705) and r.live == ":1"
+    # another device moves it while we are idle-ish: the live display's value is returned
+    assert r.update({":0": (3839, 2159), ":1": (1500, 900)}, (0, 0)) == (1500, 900)
+
+
+def test_resync_ignores_flipping_stale_display_and_drops_dead_live():
+    r = pointer_sync.Resync(3840, 2160)
+    r.begin({":0": (3839, 2159), ":1": (500, 500)})
+    assert r.update({":0": (1920, 1080), ":1": (500, 500)}, (8, 8)) is None   # stale flip is not our move
+    assert r.update({":0": (3839, 2159), ":1": (508, 508)}, (8, 8)) == (508, 508)
+    for _ in range(3):                                                    # :1 stops following us
+        out = r.update({":0": (3839, 2159), ":1": (508, 508)}, (8, 8))
+    assert r.live is None and out is None
