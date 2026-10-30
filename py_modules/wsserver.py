@@ -71,6 +71,14 @@ class Server:
         self.clients.clear()
         self.cursors.clear()
 
+    def broadcast_clients(self, text):
+        frame = make_frame(1, text.encode())
+        for w in list(self.clients):
+            try:
+                w.write(frame)
+            except Exception:
+                self.clients.discard(w)
+
     def broadcast_cursor(self, text):
         frame = make_frame(1, text.encode())
         for w in list(self.cursors):

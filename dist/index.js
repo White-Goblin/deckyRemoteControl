@@ -2479,6 +2479,46 @@ const CursorOverlay = () => {
     return url ? SP_JSX.jsx(CursorView, { url: url }, generation) : null;
 };
 
+const MENU_MAIN = 1;
+const MENU_QUICK_ACCESS = 2;
+const APP_TYPE_SHORTCUT = 1073741824;
+const report = callable("action_result");
+// Like the physical button: open the menu, or close it when it is already the one showing
+function toggleMenu(menu) {
+    if (mainWindow()?.MenuStore?.GetOpenSideMenu?.() === menu)
+        DFL.Navigation.CloseSideMenus();
+    else if (menu === MENU_MAIN)
+        DFL.Navigation.OpenMainMenu();
+    else
+        DFL.Navigation.OpenQuickAccessMenu();
+}
+// Shortcuts (non-Steam apps) are terminated by their 64-bit game id, Steam games by app id
+function quitRunningApp() {
+    const running = [...(SteamUIStore.m_runningAppIDs ?? [])];
+    if (!running.length) {
+        report("No app is running");
+        return;
+    }
+    const appid = String(running[0]);
+    const overview = appStore.GetAppOverviewByAppID(Number(appid));
+    SteamClient.Apps.TerminateApp(overview?.app_type === APP_TYPE_SHORTCUT ? String(overview.m_gameid) : appid, false);
+    report(`Closing ${overview?.display_name ?? "app"}`);
+}
+function runAction(action) {
+    try {
+        if (action === "steam")
+            toggleMenu(MENU_MAIN);
+        else if (action === "qam")
+            toggleMenu(MENU_QUICK_ACCESS);
+        else if (action === "quit")
+            quitRunningApp();
+    }
+    catch (e) {
+        console.error("Remote Control: action failed", action, e);
+        report("That didn't work");
+    }
+}
+
 const getState = callable("get_state");
 const setEnabled = callable("set_enabled");
 const regenerateToken = callable("regenerate_token");
@@ -2513,6 +2553,7 @@ function Content() {
 var index = definePlugin(() => {
     routerHook.addGlobalComponent("DeckyRemoteControlCursor", CursorOverlay);
     const listener = addEventListener("rc_activity", () => onActivity());
+    const actionListener = addEventListener("rc_action", runAction);
     const viewListener = addEventListener("rc_view", (visible) => {
         setViewVisible(visible);
         if (!visible)
@@ -2526,6 +2567,7 @@ var index = definePlugin(() => {
         onDismount() {
             removeEventListener("rc_activity", listener);
             removeEventListener("rc_view", viewListener);
+            removeEventListener("rc_action", actionListener);
             disposeCursor();
             routerHook.removeGlobalComponent("DeckyRemoteControlCursor");
         },

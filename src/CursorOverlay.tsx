@@ -10,7 +10,7 @@ const IDLE_MS = 1700;
 
 const getCursorUrl = callable<[], { cursor_ws: string }>("get_state");
 
-const mainWindow = (): any => (Router as any).WindowStore?.GamepadUIMainWindowInstance;
+export const mainWindow = (): any => (Router as any).WindowStore?.GamepadUIMainWindowInstance;
 
 export const screenInfo = () => {
   const win: Window | undefined = mainWindow()?.BrowserWindow;

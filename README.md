@@ -2,9 +2,10 @@
 
 Use a phone or tablet as a touchpad and keyboard for your SteamOS device. Scan a QR code — **no app install** on the phone.
 
-- Touchpad: drag = move, tap = click, two-finger tap = right-click, two-finger drag = scroll
+- Touchpad: drag = move, tap = click, two-finger tap = right-click, two-finger drag = scroll, and a two-finger flick keeps scrolling with momentum
 - A translucent circular cursor with a speed-based trail appears in Steam's UI while you use it and disappears ~1.5 s after you stop
-- Phone keyboard input (swipe typing, autocorrect, dictation, emoji), plus Esc / arrow / Enter buttons
+- Phone keyboard input (swipe typing, autocorrect, dictation, emoji)
+- Buttons under the touchpad: Steam menu and Quick Access (bottom left, each toggles its menu), arrow keys in a cross (bottom middle, hold to repeat), Esc, Enter and the keyboard (bottom right). **Quit app** sits alone at the top right and needs a second tap within 3 seconds to close the running app
 - Idle cost is zero: the server only runs while the toggle is on; no overlay exists unless input is arriving
 
 ## Install (Decky developer mode)

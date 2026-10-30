@@ -158,6 +158,11 @@ class Plugin:
     def _click(self, n):
         asyncio.ensure_future(self._click_async(n))
 
+    async def action_result(self, message: str):
+        """The frontend reports what an action did; show it on the phone."""
+        if self.server:
+            self.server.broadcast_clients(json.dumps({"t": "toast", "m": str(message)[:80]}))
+
     async def view_ready(self):
         if self.view_event:
             self.view_event.set()
@@ -246,6 +251,9 @@ class Plugin:
             self._activity(force=True)
         elif t == "k":
             self._type(str(m.get("text", ""))[:2000])
+        elif t == "act":
+            if m.get("a") in ("steam", "qam", "quit"):
+                asyncio.ensure_future(decky.emit("rc_action", m["a"]))
         elif t == "key":
             code = uinput.KEY.get(m.get("k"))
             if code:
