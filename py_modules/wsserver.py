@@ -64,12 +64,16 @@ class Server:
     async def stop(self):
         if self._server:
             self._server.close()
-            await self._server.wait_closed()
+            # wait_closed() waits for every open connection, so close them first
+            for w in list(self.clients | self.cursors):
+                w.close()
+            self.clients.clear()
+            self.cursors.clear()
+            try:
+                await asyncio.wait_for(self._server.wait_closed(), 2)
+            except asyncio.TimeoutError:
+                pass
             self._server = None
-        for w in list(self.clients | self.cursors):
-            w.close()
-        self.clients.clear()
-        self.cursors.clear()
 
     def broadcast_clients(self, text):
         frame = make_frame(1, text.encode())

@@ -40,6 +40,9 @@
   .pill { position: fixed; z-index: 5; top: calc(20px + env(safe-area-inset-top)); display: flex; align-items: center; gap: 7px;
     height: 34px; padding: 0 12px; border-radius: 999px; background: rgba(12,17,26,.72); border: 1px solid var(--hair);
     -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); font-size: 12px; font-weight: 600; letter-spacing: .02em; }
+  #offline { left: calc(20px + env(safe-area-inset-left)); color: #ffb4b6; opacity: 0; transition: opacity .25s ease; pointer-events: none; }
+  #offline.show { opacity: 1; }
+  #offline i { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 8px var(--danger); }
   #quit { right: calc(20px + env(safe-area-inset-right)); border: 1px solid var(--hair); color: #b6c2d8; cursor: pointer; }
   #quit svg { width: 16px; height: 16px; flex: none; }
   #quit[hidden] { display: none; }
@@ -143,6 +146,7 @@
   </div>
 </div>
 <div id="ripple"></div>
+<div class="pill" id="offline" role="status"><i></i>Not connected</div>
 <button class="pill" id="quit" aria-label="Quit running app"><svg viewBox="0 0 24 24"><path d="M12 3v8M6.4 6.6a8 8 0 1 0 11.2 0"/></svg><span id="quitText">Quit app</span></button>
 <div id="toast"></div>
 <textarea id="kb" autocapitalize="sentences" autocomplete="off" autocorrect="on" spellcheck="true" aria-label="keyboard input"></textarea>
@@ -178,11 +182,17 @@
   let ws, retry = 0, queue = [];
 
   // ---- connection ----
+  // The "Not connected" notice only appears after the connection has been down for a moment, so a
+  // quick reconnect (or the first connect) never flashes it. A silent drop (phone asleep, Wi-Fi
+  // change) is caught by the missing heartbeat reply.
+  const offline = $('#offline'); let offTimer = 0, lastSeen = 0;
+  const markDown = () => { if (!offTimer) offTimer = setTimeout(() => offline.classList.add('show'), 1500); };
+  const markUp = () => { clearTimeout(offTimer); offTimer = 0; offline.classList.remove('show'); };
   function connect() {
     ws = new WebSocket(`ws://${location.host}/ws?t=${encodeURIComponent(token)}`);
-    ws.onmessage = (e) => { try { const m = JSON.parse(e.data); if (m.t === 'toast') toast(m.m); else if (m.t === 'app') setApp(m.name); } catch (err) {} };
-    ws.onopen = () => { retry = 0; ws.send(JSON.stringify({ t: 'hello' })); queue.forEach((m) => ws.send(m)); queue = []; };
-    ws.onclose = () => { setTimeout(connect, Math.min(3000, 300 * ++retry)); };
+    ws.onmessage = (e) => { lastSeen = Date.now(); try { const m = JSON.parse(e.data); if (m.t === 'toast') toast(m.m); else if (m.t === 'app') setApp(m.name); } catch (err) {} };
+    ws.onopen = () => { retry = 0; lastSeen = Date.now(); markUp(); ws.send(JSON.stringify({ t: 'hello' })); queue.forEach((m) => ws.send(m)); queue = []; };
+    ws.onclose = () => { markDown(); setTimeout(connect, Math.min(3000, 300 * ++retry)); };
     ws.onerror = () => ws.close();
   }
   function send(o) {
@@ -190,7 +200,16 @@
     if (ws && ws.readyState === 1) ws.send(s);
     else if (o.t !== 'm' && queue.length < 50) queue.push(s);
   }
-  setInterval(() => ws && ws.readyState === 1 && send({ t: 'p' }), 5000);
+  markDown();
+  setInterval(() => {
+    if (!ws || ws.readyState !== 1) return;
+    if (Date.now() - lastSeen > 13000) { // dead socket: do not wait for it to report itself closed
+      const old = ws; old.onopen = old.onmessage = old.onclose = old.onerror = null;
+      try { old.close(); } catch (e) {}
+      markDown(); setTimeout(connect, 300); return;
+    }
+    send({ t: 'p' });
+  }, 5000);
   connect();
 
   // ---- viewport / wake lock ----

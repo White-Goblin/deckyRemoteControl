@@ -98,8 +98,9 @@ def test_end_to_end():
         assert await frame() == {"t": "app", "name": "Jellyfin"}
         await p.app_state("")
         assert await frame() == {"t": "app", "name": ""}
+        # disabling while a phone is still connected must not hang
+        await asyncio.wait_for(p._unload(), 5)
         w.close()
-        await p._unload()
     asyncio.run(run())
 
 
