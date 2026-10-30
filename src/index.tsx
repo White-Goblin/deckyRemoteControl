@@ -6,11 +6,11 @@ import {
   ToggleField,
   staticClasses,
 } from "@decky/ui";
-import { addEventListener, removeEventListener, callable, definePlugin } from "@decky/api";
+import { addEventListener, removeEventListener, callable, definePlugin, routerHook } from "@decky/api";
 import { useEffect, useState } from "react";
 import { FaMobileAlt } from "react-icons/fa";
 import qrcode from "qrcode-generator";
-import { disposeOverlay, onActivity, screenSize } from "./overlay";
+import { CursorOverlay, disposeCursor, onActivity, screenInfo, setViewVisible } from "./CursorOverlay";
 
 interface State {
   running: boolean;
@@ -24,7 +24,8 @@ const getState = callable<[], State>("get_state");
 const setEnabled = callable<[enabled: boolean], State>("set_enabled");
 const regenerateToken = callable<[], State>("regenerate_token");
 const setSensitivity = callable<[value: number], void>("set_sensitivity");
-const setScreen = callable<[width: number, height: number], void>("set_screen");
+const viewReady = callable<[], void>("view_ready");
+const setScreen = callable<[width: number, height: number, scale: number], void>("set_screen");
 
 function Qr({ text }: { text: string }) {
   const qr = qrcode(0, "M");
@@ -60,7 +61,7 @@ function Content() {
             description={s.running ? `${s.clients} device(s) connected` : "Server is off"}
             checked={s.running}
             onChange={async (v) => {
-              if (v) { const [w, h] = screenSize(); await setScreen(w, h); }
+              if (v) { const { width, height, scale } = screenInfo(); await setScreen(width, height, scale); }
               setS(await setEnabled(v));
             }}
           />
@@ -99,8 +100,12 @@ function Content() {
 }
 
 export default definePlugin(() => {
-  const listener = addEventListener<[x: number, y: number, speed: number, down: boolean]>(
-    "rc_activity", (x, y, speed, down) => onActivity(x, y, speed, down));
+  routerHook.addGlobalComponent("DeckyRemoteControlCursor", CursorOverlay);
+  const listener = addEventListener<[down: boolean]>("rc_activity", () => onActivity());
+  const viewListener = addEventListener<[visible: boolean]>("rc_view", (visible) => {
+    setViewVisible(visible);
+    if (!visible) setTimeout(() => viewReady(), 40); // let the compositor drop the view first
+  });
 
   return {
     name: "Remote Control",
@@ -109,7 +114,9 @@ export default definePlugin(() => {
     icon: <FaMobileAlt />,
     onDismount() {
       removeEventListener("rc_activity", listener);
-      disposeOverlay();
+      removeEventListener("rc_view", viewListener);
+      disposeCursor();
+      routerHook.removeGlobalComponent("DeckyRemoteControlCursor");
     },
   };
 });

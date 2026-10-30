@@ -1,7 +1,7 @@
 {
   "name": "Remote Control",
   "author": "White-Goblin",
-  "flags": ["_root"],
+  "flags": [],
   "api_version": 1,
   "publish": {
     "tags": ["utility", "root"],

@@ -18,6 +18,7 @@ if (api._version != API_VERSION) {
 const callable = api.callable;
 const addEventListener = api.addEventListener;
 const removeEventListener = api.removeEventListener;
+const routerHook = api.routerHook;
 const definePlugin = (fn) => {
     return (...args) => {
         return fn(...args);
@@ -2317,106 +2318,152 @@ const createDataURL = function(width, height, getPixel) {
   return 'data:image/gif;base64,' + base64;
 };
 
-// Cursor overlay for Steam's gaming-mode UI. Nothing exists in the DOM (and no
-// animation frame runs) unless input arrived within the last IDLE_MS.
-const IDLE_MS = 1500;
-const TRAIL_MS = 380;
-let canvas = null;
-let win = null;
-let raf = 0;
-let trail = [];
-let cur = { x: 0, y: 0, down: false };
-let lastInput = 0;
-function ensure() {
-    if (canvas && canvas.isConnected)
-        return true;
-    try {
-        win = DFL.findSP();
-        const doc = win?.document;
-        if (!doc?.body)
-            return false;
-        canvas = doc.createElement("canvas");
-        canvas.width = win.innerWidth;
-        canvas.height = win.innerHeight;
-        canvas.style.cssText =
-            "position:fixed;left:0;top:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483647;";
-        doc.body.appendChild(canvas);
-        return true;
-    }
-    catch {
-        return false;
-    }
-}
-function teardown() {
-    if (raf && win)
-        win.cancelAnimationFrame(raf);
+// The cursor page is inlined (data: URL) so the overlay never depends on an HTTP load that could
+// show a browser error page; it only needs the WebSocket, which just stays closed if the server is off.
+const PAGE = (wsUrl) => `<!doctype html><html><head><meta charset="utf-8"><title>cursor</title>
+<style>html,body{margin:0;background:transparent;overflow:hidden}canvas{position:fixed;inset:0;width:100vw;height:100vh}</style>
+</head><body><canvas id="c"></canvas><script>const WS_URL=${JSON.stringify(wsUrl)};
+(() => {
+  const IDLE = 1500, TRAIL = 380;
+  const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  function size() { cv.width = innerWidth * dpr; cv.height = innerHeight * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); }
+  size(); addEventListener('resize', size);
+  let trail = [], cur = null, last = 0, raf = 0;
+  function frame(now) {
     raf = 0;
-    canvas?.remove();
-    canvas = null;
-    trail = [];
-}
-function frame(now) {
-    raf = 0;
-    if (!canvas || !win)
-        return;
-    if (now - lastInput > IDLE_MS)
-        return teardown();
-    const ctx = canvas.getContext("2d");
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    trail = trail.filter((p) => now - p.t < TRAIL_MS);
-    ctx.lineCap = "round";
+    ctx.clearRect(0, 0, innerWidth, innerHeight);
+    if (!cur || now - last > IDLE) return;
+    trail = trail.filter((p) => now - p.t < TRAIL);
+    ctx.lineCap = 'round';
     for (let i = 1; i < trail.length; i++) {
-        const a = trail[i - 1], b = trail[i];
-        const life = 1 - (now - b.t) / TRAIL_MS;
-        ctx.strokeStyle = `rgba(120,185,255,${0.45 * life})`;
-        ctx.lineWidth = Math.max(2, b.w * life);
-        ctx.beginPath();
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
-        ctx.stroke();
+      const a = trail[i - 1], b = trail[i], life = 1 - (now - b.t) / TRAIL;
+      ctx.strokeStyle = "rgba(120,185,255," + 0.45 * life + ")";
+      ctx.lineWidth = Math.max(2, b.w * life);
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
     }
-    const fade = Math.min(1, (IDLE_MS - (now - lastInput)) / 400);
-    const r = cur.down ? 17 : 22;
-    ctx.globalAlpha = fade;
-    ctx.beginPath();
-    ctx.arc(cur.x, cur.y, r, 0, Math.PI * 2);
-    ctx.fillStyle = cur.down ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.32)";
-    ctx.fill();
-    ctx.lineWidth = 2.5;
-    ctx.strokeStyle = "rgba(90,165,255,0.9)";
-    ctx.stroke();
+    ctx.globalAlpha = Math.min(1, (IDLE - (now - last)) / 400);
+    ctx.beginPath(); ctx.arc(cur.x, cur.y, cur.d ? 17 : 22, 0, Math.PI * 2);
+    ctx.fillStyle = cur.d ? 'rgba(255,255,255,.55)' : 'rgba(255,255,255,.32)'; ctx.fill();
+    ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(90,165,255,.9)'; ctx.stroke();
     ctx.globalAlpha = 1;
-    raf = win.requestAnimationFrame(frame);
+    raf = requestAnimationFrame(frame);
+  }
+  function connect() {
+    const ws = new WebSocket(WS_URL);
+    ws.onmessage = (e) => {
+      const m = JSON.parse(e.data), now = performance.now();
+      cur = m; last = now;
+      trail.push({ x: m.x, y: m.y, t: now, w: Math.min(18, 4 + m.s * 0.6) });
+      if (trail.length > 60) trail.shift();
+      if (!raf) raf = requestAnimationFrame(frame);
+    };
+    ws.onclose = () => setTimeout(connect, 1000);
+  }
+  connect();
+})();
+</script></body></html>`;
+const cursorDataUrl = (wsUrl) => "data:text/html;charset=utf-8," + encodeURIComponent(PAGE(wsUrl));
+
+// Adapted from rossimo/decky-pip (BSD-3-Clause)
+
+var UIComposition;
+(function (UIComposition) {
+    UIComposition[UIComposition["Hidden"] = 0] = "Hidden";
+    UIComposition[UIComposition["Notification"] = 1] = "Notification";
+    UIComposition[UIComposition["Overlay"] = 2] = "Overlay";
+    UIComposition[UIComposition["Opaque"] = 3] = "Opaque";
+    UIComposition[UIComposition["OverlayKeyboard"] = 4] = "OverlayKeyboard";
+})(UIComposition || (UIComposition = {}));
+// Steam's internal hook that keeps the UI composited above the running game
+const useUIComposition = DFL.findModuleChild((m) => {
+    if (typeof m !== "object")
+        return undefined;
+    for (const prop in m) {
+        if (typeof m[prop] === "function" &&
+            m[prop].toString().includes("AddMinimumCompositionStateRequest") &&
+            m[prop].toString().includes("ChangeMinimumCompositionStateRequest") &&
+            m[prop].toString().includes("RemoveMinimumCompositionStateRequest") &&
+            !m[prop].toString().includes("m_mapCompositionStateRequests")) {
+            return m[prop];
+        }
+    }
+});
+
+// Cursor drawn in its own Steam browser view so it sits above menus, Quick Access and games
+// (same technique as a picture-in-picture overlay). The view exists only while input is active.
+const IDLE_MS = 1700;
+const getCursorUrl = callable("get_state");
+const mainWindow = () => DFL.Router.WindowStore?.GamepadUIMainWindowInstance;
+const screenInfo = () => {
+    const win = mainWindow()?.BrowserWindow;
+    return {
+        width: win?.innerWidth || 1280,
+        height: win?.innerHeight || 720,
+        scale: win?.devicePixelRatio || 1,
+    };
+};
+let listener = null;
+let hideTimer;
+let showing = false;
+let browser = null;
+let viewHidden = false;
+// Steam's browser view would swallow clicks meant for the UI beneath it, so the backend asks
+// us to hide it while a mouse button is down.
+function setViewVisible(visible) {
+    viewHidden = !visible;
+    browser?.SetVisible(visible);
 }
-function onActivity(x, y, speed, down) {
-    if (!ensure() || !canvas || !win)
+function onActivity() {
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => { showing = false; listener?.(""); }, IDLE_MS);
+    if (showing)
         return;
-    const now = performance.now();
-    lastInput = now;
-    cur = { x, y, down };
-    trail.push({ x, y, t: now, w: Math.min(18, 4 + speed * 0.6) });
-    if (trail.length > 60)
-        trail.shift();
-    if (!raf)
-        raf = win.requestAnimationFrame(frame);
+    showing = true;
+    getCursorUrl().then((s) => { if (showing)
+        listener?.(cursorDataUrl(s.cursor_ws)); });
 }
-function disposeOverlay() {
-    teardown();
+function disposeCursor() {
+    viewHidden = false;
+    clearTimeout(hideTimer);
+    showing = false;
+    listener?.("");
 }
-function screenSize() {
-    try {
-        const w = DFL.findSP();
-        return [w.innerWidth, w.innerHeight];
-    }
-    catch {
-        return [1280, 800];
-    }
-}
+const CursorView = ({ url }) => {
+    useUIComposition(UIComposition.Notification);
+    const [view] = SP_REACT.useState(() => {
+        try {
+            return mainWindow().CreateBrowserView("decky-remote-control-cursor");
+        }
+        catch (e) {
+            console.error("Remote Control: CreateBrowserView failed", e);
+            return null;
+        }
+    });
+    SP_REACT.useEffect(() => (view ? () => { browser = null; view.Destroy(); } : undefined), [view]);
+    SP_REACT.useEffect(() => {
+        if (!view)
+            return;
+        const { width, height } = screenInfo();
+        view.LoadURL(url);
+        const b = view.GetBrowser();
+        b.SetBounds(0, 0, width, height);
+        browser = b;
+        b.SetVisible(!viewHidden);
+    }, [view, url]);
+    return null;
+};
+const CursorOverlay = () => {
+    const [url, setUrl] = SP_REACT.useState("");
+    SP_REACT.useEffect(() => { listener = setUrl; return () => { listener = null; }; }, []);
+    return url ? SP_JSX.jsx(CursorView, { url: url }) : null;
+};
 
 const getState = callable("get_state");
 const setEnabled = callable("set_enabled");
 const regenerateToken = callable("regenerate_token");
 const setSensitivity = callable("set_sensitivity");
+const viewReady = callable("view_ready");
 const setScreen = callable("set_screen");
 function Qr({ text }) {
     const qr = qrcode(0, "M");
@@ -2437,14 +2484,20 @@ function Content() {
         return SP_JSX.jsx(DFL.PanelSection, { title: "Remote Control", children: "Loading\u2026" });
     return (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs(DFL.PanelSection, { title: "Remote Control", children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ToggleField, { label: "Enable", description: s.running ? `${s.clients} device(s) connected` : "Server is off", checked: s.running, onChange: async (v) => {
                                 if (v) {
-                                    const [w, h] = screenSize();
-                                    await setScreen(w, h);
+                                    const { width, height, scale } = screenInfo();
+                                    await setScreen(width, height, scale);
                                 }
                                 setS(await setEnabled(v));
                             } }) }), s.error && SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { color: "#f66" }, children: s.error }) })] }), s.running && (SP_JSX.jsxs(DFL.PanelSection, { title: "Connect", children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(Qr, { text: s.url }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: { fontSize: 11, wordBreak: "break-all", opacity: 0.8 }, children: ["Scan with your phone camera (same Wi-Fi), or open:", SP_JSX.jsx("br", {}), s.url] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: async () => setS(await regenerateToken()), children: "New link (disconnects devices)" }) })] })), SP_JSX.jsx(DFL.PanelSection, { title: "Settings", children: SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.SliderField, { label: "Pointer speed", min: 0.5, max: 3, step: 0.1, showValue: true, value: s.sensitivity, onChange: (v) => { setS({ ...s, sensitivity: v }); setSensitivity(v); } }) }) })] }));
 }
 var index = definePlugin(() => {
-    const listener = addEventListener("rc_activity", (x, y, speed, down) => onActivity(x, y, speed, down));
+    routerHook.addGlobalComponent("DeckyRemoteControlCursor", CursorOverlay);
+    const listener = addEventListener("rc_activity", () => onActivity());
+    const viewListener = addEventListener("rc_view", (visible) => {
+        setViewVisible(visible);
+        if (!visible)
+            setTimeout(() => viewReady(), 40); // let the compositor drop the view first
+    });
     return {
         name: "Remote Control",
         titleView: SP_JSX.jsx("div", { className: DFL.staticClasses.Title, children: "Remote Control" }),
@@ -2452,7 +2505,9 @@ var index = definePlugin(() => {
         icon: SP_JSX.jsx(FaMobileAlt, {}),
         onDismount() {
             removeEventListener("rc_activity", listener);
-            disposeOverlay();
+            removeEventListener("rc_view", viewListener);
+            disposeCursor();
+            routerHook.removeGlobalComponent("DeckyRemoteControlCursor");
         },
     };
 });

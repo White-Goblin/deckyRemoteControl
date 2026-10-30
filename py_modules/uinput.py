@@ -6,7 +6,7 @@ import time
 
 EV_SYN, EV_KEY, EV_REL, EV_ABS = 0x00, 0x01, 0x02, 0x03
 SYN_REPORT = 0
-REL_HWHEEL, REL_WHEEL = 0x06, 0x08
+REL_X, REL_Y, REL_HWHEEL, REL_WHEEL = 0x00, 0x01, 0x06, 0x08
 ABS_X, ABS_Y = 0x00, 0x01
 BTN_LEFT, BTN_RIGHT, BTN_MIDDLE = 0x110, 0x111, 0x112
 
@@ -106,16 +106,22 @@ class Device:
 
 
 class Pointer(Device):
-    def __init__(self, width, height, **kw):
-        self.width, self.height = width, height
+    """Standard relative mouse: every compositor treats it as a normal mouse."""
+
+    def __init__(self, **kw):
         super().__init__(
             "Decky Remote Pointer",
             keys=(BTN_LEFT, BTN_RIGHT, BTN_MIDDLE),
-            rels=(REL_WHEEL, REL_HWHEEL),
-            abs_axes={ABS_X: (0, width - 1), ABS_Y: (0, height - 1)}, **kw)
+            rels=(REL_X, REL_Y, REL_WHEEL, REL_HWHEEL), **kw)
 
-    def move_to(self, x, y):
-        self.emit((EV_ABS, ABS_X, int(x)), (EV_ABS, ABS_Y, int(y)))
+    def move(self, dx, dy):
+        ev = []
+        if dx:
+            ev.append((EV_REL, REL_X, int(dx)))
+        if dy:
+            ev.append((EV_REL, REL_Y, int(dy)))
+        if ev:
+            self.emit(*ev)
 
     def button(self, btn, down):
         self.emit((EV_KEY, btn, 1 if down else 0))

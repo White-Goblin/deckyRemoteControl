@@ -48,6 +48,10 @@ class Plugin:
         self.pointer = self.keyboard = None
         self.width, self.height = 1280, 800
         self.x, self.y = self.width / 2, self.height / 2
+        self.fx = self.fy = 0.0
+        self.view_event = None
+        self.press_lock = asyncio.Lock()
+        self.scale = 1.0
         self.speed = 0.0
         self.last_emit = 0.0
         self.clients = 0
@@ -67,6 +71,7 @@ class Plugin:
             "url": f"http://{lan_ip()}:{port}/?t={self.settings['token']}",
             "clients": self.clients,
             "sensitivity": self.settings["sensitivity"],
+            "cursor_ws": f"ws://127.0.0.1:{port}/ws?t={self.settings['token']}&role=cursor",
             "error": self.error,
         }
 
@@ -77,12 +82,14 @@ class Plugin:
         self.error = ""
         if enabled and self.server is None:
             try:
-                self.pointer = uinput.Pointer(self.width, self.height)
+                self.pointer = uinput.Pointer()
                 self.keyboard = uinput.Keyboard()
                 self.server = Server(
                     os.path.join(decky.DECKY_PLUGIN_DIR, "web", "index.html"),
                     lambda: self.settings["token"], self._on_message, self._on_clients)
                 await self.server.start(self.settings["port"])
+                self.pointer.move(-20000, -20000)  # known corner; tracking restarts at (0, 0)
+                self.x = self.y = 0.0
             except Exception as e:  # noqa: BLE001
                 decky.logger.error(f"start failed: {e!r}")
                 self.error = f"Could not start: {e}"
@@ -103,16 +110,15 @@ class Plugin:
         self.settings["sensitivity"] = max(0.3, min(3.0, float(value)))
         self._save()
 
-    async def set_screen(self, width: int, height: int):
-        """Frontend reports the real screen size so absolute coordinates map 1:1."""
-        if (width, height) == (self.width, self.height) or width < 100 or height < 100:
+    async def set_screen(self, width: int, height: int, scale: float):
+        """Frontend reports the screen in CSS px and its device pixel ratio. The real pointer
+        moves in device pixels, so tracking is done there and divided by `scale` for drawing."""
+        if width < 100 or height < 100 or scale < 0.5:
             return
-        self.width, self.height = int(width), int(height)
+        self.scale = float(scale)
+        self.width, self.height = int(width * scale), int(height * scale)
         self.x = min(self.x, self.width - 1)
         self.y = min(self.y, self.height - 1)
-        if self.server is not None:  # recreate pointer with new axis range
-            self.pointer.close()
-            self.pointer = uinput.Pointer(self.width, self.height)
 
     # ---- input handling ----
     def _on_clients(self, n):
@@ -124,11 +130,52 @@ class Plugin:
         if not force and now - self.last_emit < EMIT_INTERVAL:
             return
         self.last_emit = now
-        asyncio.ensure_future(decky.emit(
-            "rc_activity", round(self.x), round(self.y), round(self.speed, 1),
-            self.down if down is None else down))
+        d = bool(down)
+        x, y, sp = round(self.x / self.scale), round(self.y / self.scale), round(self.speed, 1)
+        if self.server:
+            self.server.broadcast_cursor(json.dumps({"x": x, "y": y, "s": sp, "d": d}))
+        asyncio.ensure_future(decky.emit("rc_activity", d))
 
-    down = False
+    @staticmethod
+    def _btn(right):
+        return uinput.BTN_RIGHT if right else uinput.BTN_LEFT
+
+    # The cursor overlay is a browser view above Steam's UI and would swallow clicks, so the
+    # frontend hides it while a button is down (rc_view) and confirms through view_ready().
+    def _click(self, n):
+        asyncio.ensure_future(self._click_async(n))
+
+    async def view_ready(self):
+        if self.view_event:
+            self.view_event.set()
+
+    async def _hide_view(self, hidden):
+        self.view_event = asyncio.Event()
+        await decky.emit("rc_view", not hidden)
+        if hidden:
+            try:
+                await asyncio.wait_for(self.view_event.wait(), 0.3)
+            except asyncio.TimeoutError:
+                pass
+
+    async def _click_async(self, n):
+        async with self.press_lock:
+            await self._hide_view(True)
+            self.pointer.button(n, True)
+            await asyncio.sleep(0.03)
+            self.pointer.button(n, False)
+            await asyncio.sleep(0.1)
+            await self._hide_view(False)
+            self._activity(down=True, force=True)
+
+    def _rel(self, dx, dy):
+        """Relative move with sub-pixel carry so tracking matches what is injected."""
+        self.fx += dx
+        self.fy += dy
+        ix, iy = int(self.fx), int(self.fy)
+        self.fx -= ix
+        self.fy -= iy
+        self.pointer.move(ix, iy)
 
     def _on_message(self, m):
         try:
@@ -144,24 +191,15 @@ class Plugin:
         if t == "m":
             dx, dy = float(m.get("dx", 0)), float(m.get("dy", 0))
             mag = math.hypot(dx, dy)
-            gain = self.settings["sensitivity"] * (1 + 0.05 * min(mag, 30))
+            gain = self.settings["sensitivity"] * (1 + 0.05 * min(mag, 30)) * self.scale
             self.x = min(max(self.x + dx * gain, 0), self.width - 1)
             self.y = min(max(self.y + dy * gain, 0), self.height - 1)
-            self.speed = self.speed * 0.6 + mag * gain * 0.4
-            p.move_to(self.x, self.y)
+            self.speed = self.speed * 0.6 + mag * gain / self.scale * 0.4
+            self._rel(dx * gain, dy * gain)
             self._activity()
         elif t == "c":
-            btn = uinput.BTN_RIGHT if m.get("b") == "r" else uinput.BTN_LEFT
-            p.move_to(self.x, self.y)
-            p.button(btn, True)
-            p.button(btn, False)
+            self._click(self._btn(m.get("b") == "r"))
             self.speed = 0
-            self._activity(down=True, force=True)
-        elif t == "d":
-            self.down = bool(m.get("s"))
-            p.move_to(self.x, self.y)
-            p.button(uinput.BTN_LEFT, self.down)
-            self._activity(force=True)
         elif t == "s":
             p.scroll(int(m.get("dy", 0)), int(m.get("dx", 0)))
             self._activity(force=True)

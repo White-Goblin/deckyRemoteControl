@@ -29,14 +29,18 @@ def test_end_to_end():
     fake = types.ModuleType("decky")
     fake.DECKY_PLUGIN_DIR = ROOT
     fake.DECKY_PLUGIN_SETTINGS_DIR = tmp
-    fake.logger = types.SimpleNamespace(info=print, error=print)
-    async def emit(*a): events.append(a)
+    fake.logger = types.SimpleNamespace(info=print, error=print, warning=print)
+    plugin = []
+    async def emit(*a):
+        events.append(a)
+        if a[0] == "rc_view" and not a[1]:  # the frontend would hide its view and confirm
+            plugin[0].view_event.set()
     fake.emit = emit
     sys.modules["decky"] = fake
 
     class FakePointer:
-        def __init__(s, w, h): pass
-        def move_to(s, x, y): calls.append(("move", int(x), int(y)))
+        def __init__(s): pass
+        def move(s, dx, dy): calls.append(("move", int(dx), int(dy)))
         def button(s, b, d): calls.append(("btn", b, d))
         def scroll(s, v, h=0): calls.append(("scroll", v, h))
         def close(s): pass
@@ -49,6 +53,7 @@ def test_end_to_end():
 
     async def run():
         p = main.Plugin()
+        plugin.append(p)
         await p._main()
         p.settings["port"] = 18765
         st = await p.set_enabled(True)
@@ -72,7 +77,7 @@ def test_end_to_end():
             d = json.dumps(m).encode()
             w.write(bytes([0x81, 0x80 | len(d)]) + _mask(d))
         await w.drain()
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.5)
         kinds = [c[0] for c in calls]
         assert "move" in kinds and ("btn", 0x110, True) in calls
         assert ("scroll", -2, 0) in calls

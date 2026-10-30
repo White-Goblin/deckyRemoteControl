@@ -34,7 +34,7 @@
 </head>
 <body>
 <div id="dot"></div>
-<div id="pad"><div id="hint"><b>Touchpad</b><br>Drag to move · Tap to click<br>Two-finger tap = right click<br>Two-finger drag = scroll<br>Press &amp; hold, then drag = drag &amp; drop</div></div>
+<div id="pad"><div id="hint"><b>Touchpad</b><br>Drag to move · Tap to click<br>Two-finger tap = right click<br>Two-finger drag = scroll</div></div>
 <div id="ripple"></div>
 <textarea id="kb" autocapitalize="sentences" autocomplete="off" autocorrect="on" spellcheck="true" aria-label="keyboard input"></textarea>
 <div id="bar">
@@ -90,13 +90,11 @@
     hint.style.opacity = 0;
     const t = pts(e);
     if (!g) {
-      g = { start: performance.now(), n: t.length, moved: false, drag: false, scrollAcc: 0, scrollAccX: 0,
+      g = { start: performance.now(), n: t.length, moved: false, scrollAcc: 0, scrollAccX: 0,
             last: t.map((p) => [p.clientX, p.clientY]) };
-      g.timer = setTimeout(() => { if (g && !g.moved && g.n === 1) { g.drag = true; send({ t: 'd', s: 1 });
-        navigator.vibrate && navigator.vibrate(20); } }, 450);
     } else {
       g.n = Math.max(g.n, t.length); g.last = t.map((p) => [p.clientX, p.clientY]);
-      if (g.n > 1) { clearTimeout(g.timer); g.moved = g.moved && g.n > 1; }
+      if (g.n > 1) g.moved = false;
     }
   }, { passive: false });
 
@@ -108,7 +106,7 @@
     if (t.length === 1 && g.n === 1) {
       const dx = cur[0][0] - g.last[0][0], dy = cur[0][1] - g.last[0][1];
       if (!g.moved && Math.hypot(dx, dy) < 2 && performance.now() - g.start < 200) return;
-      g.moved = true; clearTimeout(g.timer);
+      g.moved = true;
       queueMove(dx, dy);
     } else if (t.length >= 2 && g.last.length >= 2) {
       const dy = (cur[0][1] + cur[1][1]) / 2 - (g.last[0][1] + g.last[1][1]) / 2;
@@ -125,11 +123,9 @@
   function end(e) {
     e.preventDefault();
     if (!g || e.touches.length) return;
-    clearTimeout(g.timer);
     flushMove();
     const dur = performance.now() - g.start;
-    if (g.drag) send({ t: 'd', s: 0 });
-    else if (!g.moved && dur < 300) {
+    if (!g.moved && dur < 300) {
       const p = e.changedTouches[0];
       ping(p.clientX, p.clientY);
       send({ t: 'c', b: g.n >= 2 ? 'r' : 'l' });
@@ -137,7 +133,7 @@
     g = null;
   }
   pad.addEventListener('touchend', end, { passive: false });
-  pad.addEventListener('touchcancel', (e) => { if (g && g.drag) send({ t: 'd', s: 0 }); g = null; });
+  pad.addEventListener('touchcancel', () => { g = null; });
 
   // ---- buttons ----
   document.querySelectorAll('#bar [data-k]').forEach((b) =>

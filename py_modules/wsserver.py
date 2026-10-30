@@ -55,6 +55,7 @@ class Server:
         self.on_message = on_message
         self.on_clients = on_clients
         self.clients = set()
+        self.cursors = set()
         self._server = None
 
     async def start(self, port):
@@ -65,9 +66,18 @@ class Server:
             self._server.close()
             await self._server.wait_closed()
             self._server = None
-        for w in list(self.clients):
+        for w in list(self.clients | self.cursors):
             w.close()
         self.clients.clear()
+        self.cursors.clear()
+
+    def broadcast_cursor(self, text):
+        frame = make_frame(1, text.encode())
+        for w in list(self.cursors):
+            try:
+                w.write(frame)
+            except Exception:
+                self.cursors.discard(w)
 
     async def _http(self, writer, status, body=b"", ctype="text/plain"):
         writer.write(f"HTTP/1.1 {status}\r\nContent-Type: {ctype}; charset=utf-8\r\n"
@@ -111,6 +121,16 @@ class Server:
         writer.write(("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
                       f"Connection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n").encode())
         await writer.drain()
+        if q.get("role", [""])[0] == "cursor":
+            self.cursors.add(writer)
+            try:
+                while True:  # receive-only: just drain until the view goes away
+                    op, _ = await read_frame(reader)
+                    if op == 8:
+                        break
+            finally:
+                self.cursors.discard(writer)
+            return
         self.clients.add(writer)
         self.on_clients(len(self.clients))
         try:
