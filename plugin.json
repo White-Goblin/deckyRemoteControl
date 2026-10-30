@@ -1,0 +1,11 @@
+{
+  "name": "Remote Control",
+  "author": "White-Goblin",
+  "flags": ["_root"],
+  "api_version": 1,
+  "publish": {
+    "tags": ["utility", "root"],
+    "description": "Use a phone or tablet as a touchpad and keyboard for your Steam Deck. Scan a QR code; no app needed.",
+    "image": "https://opengraph.githubassets.com/1/SteamDeckHomebrew/PluginLoader"
+  }
+}

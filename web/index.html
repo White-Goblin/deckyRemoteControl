@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0e1117">
+<title>Remote Control</title>
+<style>
+  :root { --vh: 100dvh; color-scheme: dark; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: var(--vh); background: #0e1117; color: #8b95a7;
+    font: 15px system-ui, sans-serif; overflow: hidden; overscroll-behavior: none; }
+  #pad { position: fixed; inset: 0 0 64px 0; touch-action: none; user-select: none;
+    -webkit-user-select: none; display: grid; place-items: center; text-align: center;
+    background: radial-gradient(circle at 50% 40%, #182030, #0e1117 70%); }
+  #hint { transition: opacity .6s; pointer-events: none; line-height: 1.6; }
+  #hint b { color: #c9d4e8; }
+  #bar { position: fixed; left: 0; right: 0; bottom: 0; height: 64px; display: flex; gap: 6px;
+    padding: 8px calc(8px + env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) calc(8px + env(safe-area-inset-left));
+    background: #151a24; border-top: 1px solid #232b3a; }
+  #bar button { flex: 1; border: 0; border-radius: 10px; background: #222b3c; color: #dbe4f5;
+    font-size: 18px; touch-action: manipulation; }
+  #bar button:active, #bar button.on { background: #3a7bd5; }
+  #dot { position: fixed; top: 10px; right: 12px; width: 10px; height: 10px; border-radius: 50%;
+    background: #d94c4c; box-shadow: 0 0 8px currentColor; color: #d94c4c; }
+  #dot.ok { background: #3fc77a; color: #3fc77a; }
+  #ripple { position: fixed; width: 56px; height: 56px; margin: -28px 0 0 -28px; border-radius: 50%;
+    border: 2px solid rgba(120,180,255,.7); pointer-events: none; opacity: 0; }
+  #ripple.go { animation: rp .35s ease-out; }
+  @keyframes rp { from { opacity: .9; transform: scale(.4); } to { opacity: 0; transform: scale(1.2); } }
+  #kb { position: fixed; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0;
+    resize: none; font-size: 16px; }
+</style>
+</head>
+<body>
+<div id="dot"></div>
+<div id="pad"><div id="hint"><b>Touchpad</b><br>Drag to move · Tap to click<br>Two-finger tap = right click<br>Two-finger drag = scroll<br>Press &amp; hold, then drag = drag &amp; drop</div></div>
+<div id="ripple"></div>
+<textarea id="kb" autocapitalize="sentences" autocomplete="off" autocorrect="on" spellcheck="true" aria-label="keyboard input"></textarea>
+<div id="bar">
+  <button id="kbBtn" aria-label="Keyboard">⌨</button>
+  <button data-k="Escape" aria-label="Escape">Esc</button>
+  <button data-k="Left" aria-label="Left">◀</button>
+  <button data-k="Up" aria-label="Up">▲</button>
+  <button data-k="Down" aria-label="Down">▼</button>
+  <button data-k="Right" aria-label="Right">▶</button>
+  <button data-k="Enter" aria-label="Enter">⏎</button>
+</div>
+<script>
+(() => {
+  const $ = (s) => document.querySelector(s);
+  const pad = $('#pad'), dot = $('#dot'), kb = $('#kb'), ripple = $('#ripple'), hint = $('#hint');
+  const token = new URLSearchParams(location.search).get('t') || '';
+  let ws, retry = 0, queue = [];
+
+  // ---- connection ----
+  function connect() {
+    ws = new WebSocket(`ws://${location.host}/ws?t=${encodeURIComponent(token)}`);
+    ws.onopen = () => { retry = 0; dot.className = 'ok'; queue.forEach((m) => ws.send(m)); queue = []; };
+    ws.onclose = () => { dot.className = ''; setTimeout(connect, Math.min(3000, 300 * ++retry)); };
+    ws.onerror = () => ws.close();
+  }
+  function send(o) {
+    const s = JSON.stringify(o);
+    if (ws && ws.readyState === 1) ws.send(s);
+    else if (o.t !== 'm' && queue.length < 50) queue.push(s);
+  }
+  setInterval(() => ws && ws.readyState === 1 && send({ t: 'p' }), 5000);
+  connect();
+
+  // ---- viewport / wake lock ----
+  const vv = window.visualViewport;
+  const fit = () => document.documentElement.style.setProperty('--vh', (vv ? vv.height : innerHeight) + 'px');
+  vv && vv.addEventListener('resize', fit); fit();
+  async function wake() { try { await navigator.wakeLock.request('screen'); } catch (e) {} }
+  document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && wake());
+  wake();
+
+  // ---- touchpad ----
+  let mx = 0, my = 0, raf = 0;
+  function flushMove() { raf = 0; if (mx || my) { send({ t: 'm', dx: +mx.toFixed(2), dy: +my.toFixed(2) }); mx = my = 0; } }
+  function queueMove(dx, dy) { mx += dx; my += dy; if (!raf) raf = requestAnimationFrame(flushMove); }
+  function ping(x, y) { ripple.style.left = x + 'px'; ripple.style.top = y + 'px';
+    ripple.classList.remove('go'); void ripple.offsetWidth; ripple.classList.add('go'); }
+
+  let g = null; // current gesture
+  const pts = (e) => Array.from(e.touches);
+  pad.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    hint.style.opacity = 0;
+    const t = pts(e);
+    if (!g) {
+      g = { start: performance.now(), n: t.length, moved: false, drag: false, scrollAcc: 0, scrollAccX: 0,
+            last: t.map((p) => [p.clientX, p.clientY]) };
+      g.timer = setTimeout(() => { if (g && !g.moved && g.n === 1) { g.drag = true; send({ t: 'd', s: 1 });
+        navigator.vibrate && navigator.vibrate(20); } }, 450);
+    } else {
+      g.n = Math.max(g.n, t.length); g.last = t.map((p) => [p.clientX, p.clientY]);
+      if (g.n > 1) { clearTimeout(g.timer); g.moved = g.moved && g.n > 1; }
+    }
+  }, { passive: false });
+
+  pad.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    if (!g) return;
+    const t = pts(e);
+    const cur = t.map((p) => [p.clientX, p.clientY]);
+    if (t.length === 1 && g.n === 1) {
+      const dx = cur[0][0] - g.last[0][0], dy = cur[0][1] - g.last[0][1];
+      if (!g.moved && Math.hypot(dx, dy) < 2 && performance.now() - g.start < 200) return;
+      g.moved = true; clearTimeout(g.timer);
+      queueMove(dx, dy);
+    } else if (t.length >= 2 && g.last.length >= 2) {
+      const dy = (cur[0][1] + cur[1][1]) / 2 - (g.last[0][1] + g.last[1][1]) / 2;
+      const dx = (cur[0][0] + cur[1][0]) / 2 - (g.last[0][0] + g.last[1][0]) / 2;
+      if (Math.abs(dy) + Math.abs(dx) > 0.5) g.moved = true;
+      g.scrollAcc += dy; g.scrollAccX += dx;
+      const STEP = 24;
+      const v = Math.trunc(g.scrollAcc / STEP), h = Math.trunc(g.scrollAccX / STEP);
+      if (v || h) { g.scrollAcc -= v * STEP; g.scrollAccX -= h * STEP; send({ t: 's', dy: v, dx: h }); }
+    }
+    g.last = cur;
+  }, { passive: false });
+
+  function end(e) {
+    e.preventDefault();
+    if (!g || e.touches.length) return;
+    clearTimeout(g.timer);
+    flushMove();
+    const dur = performance.now() - g.start;
+    if (g.drag) send({ t: 'd', s: 0 });
+    else if (!g.moved && dur < 300) {
+      const p = e.changedTouches[0];
+      ping(p.clientX, p.clientY);
+      send({ t: 'c', b: g.n >= 2 ? 'r' : 'l' });
+    }
+    g = null;
+  }
+  pad.addEventListener('touchend', end, { passive: false });
+  pad.addEventListener('touchcancel', (e) => { if (g && g.drag) send({ t: 'd', s: 0 }); g = null; });
+
+  // ---- buttons ----
+  document.querySelectorAll('#bar [data-k]').forEach((b) =>
+    b.addEventListener('click', () => send({ t: 'key', k: b.dataset.k })));
+  const kbBtn = $('#kbBtn');
+  kbBtn.addEventListener('click', () => (document.activeElement === kb ? kb.blur() : kb.focus()));
+  kb.addEventListener('focus', () => kbBtn.classList.add('on'));
+  kb.addEventListener('blur', () => kbBtn.classList.remove('on'));
+  // keep the keyboard open when pressing toolbar buttons
+  document.querySelectorAll('#bar button').forEach((b) =>
+    b.addEventListener('pointerdown', (e) => { if (document.activeElement === kb && b !== kbBtn) e.preventDefault(); }));
+
+  // ---- text input: mirror textarea content, send minimal diffs (supports swipe typing, IME, autocorrect) ----
+  const SENTINEL = ' ';
+  let sent = SENTINEL, composing = false;
+  kb.value = SENTINEL;
+  function sync() {
+    const v = kb.value;
+    let i = 0; const n = Math.min(v.length, sent.length);
+    while (i < n && v[i] === sent[i]) i++;
+    const back = Array.from(sent.slice(i)).length;
+    for (let k = 0; k < back; k++) send({ t: 'key', k: 'Backspace' });
+    const add = v.slice(i);
+    if (add) send({ t: 'k', text: add });
+    sent = v;
+    if (!composing && (v.length === 0 || v.length > 120)) { kb.value = sent = SENTINEL; }
+  }
+  kb.addEventListener('compositionstart', () => { composing = true; });
+  kb.addEventListener('compositionend', () => { composing = false; sync(); });
+  kb.addEventListener('input', (e) => {
+    if (e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph') return;
+    sync();
+  });
+  kb.addEventListener('beforeinput', (e) => {
+    if (e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph') {
+      e.preventDefault(); send({ t: 'key', k: 'Enter' });
+    }
+  });
+  kb.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); send({ t: 'key', k: 'Enter' }); }
+  });
+})();
+</script>
+</body>
+</html>
