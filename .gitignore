@@ -54,3 +54,13 @@ out/*
 cli/
 cli/*
 cli/decky
+
+# Local-only: agent notes, editor/template config, device dev scripts
+AGENTS.md
+CLAUDE.md
+.claude/
+.vscode/
+assets/
+py_modules/.keep
+scripts/deploy.sh
+scripts/device-test.sh
