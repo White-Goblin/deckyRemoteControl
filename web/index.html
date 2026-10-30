@@ -3,84 +3,144 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<meta name="theme-color" content="#0e1117">
+<meta name="theme-color" content="#0a0e15">
 <title>Remote Control</title>
 <style>
-  :root { --vh: 100dvh; color-scheme: dark; }
+  :root {
+    color-scheme: dark; --vh: 100dvh;
+    --bg: #0a0e15; --ink: #e6edf8; --muted: #8592a8; --accent: #1a9fff; --danger: #e5484d;
+    --surface-top: #1e2738; --surface-bot: #151c2a; --hair: rgba(255,255,255,.07);
+    --gap: 8px;
+    --dpad: min(clamp(150px, 22vh, 200px), 42vw);
+    --dock: calc(var(--dpad) + 26px + env(safe-area-inset-bottom));
+  }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body { margin: 0; height: var(--vh); background: #0e1117; color: #8b95a7;
-    font: 15px system-ui, sans-serif; overflow: hidden; overscroll-behavior: none; }
-  :root { --row: 52px; --gap: 8px; --dock: calc(var(--row) * 3 + var(--gap) * 2 + 16px + env(safe-area-inset-bottom)); }
-  @media (max-height: 480px) { :root { --row: 40px; --gap: 6px; } }
-  @media (max-width: 340px) { :root { --row: 46px; } }
-  #pad { position: fixed; inset: 0 0 var(--dock) 0; touch-action: none; user-select: none;
-    -webkit-user-select: none; display: grid; place-items: center; text-align: center;
-    background: radial-gradient(circle at 50% 40%, #182030, #0e1117 70%); }
-  #hint { transition: opacity .6s; pointer-events: none; line-height: 1.6; }
-  #hint b { color: #c9d4e8; }
-  #dock { position: fixed; left: 0; right: 0; bottom: 0; height: var(--dock);
-    display: grid; grid-template-columns: 1fr auto 1fr; gap: var(--gap); align-items: stretch;
-    padding: 8px calc(8px + env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) calc(8px + env(safe-area-inset-left));
-    background: #151a24; border-top: 1px solid #232b3a; }
-  #dock button, #quit { border: 0; border-radius: 12px; background: #222b3c; color: #dbe4f5;
-    font: inherit; font-size: 17px; touch-action: manipulation; min-width: 0; }
-  #dock button:active, #dock button.on { background: #3a7bd5; }
-  .zone { display: flex; flex-direction: column; gap: var(--gap); min-width: 0; }
-  .zone > button, .zone .pair { flex: 1; }
-  .zone .pair { display: flex; gap: var(--gap); flex: 2; }
-  .zone .pair button { flex: 1; }
-  .zone.left button { font-size: 15px; }
-  .dpad { display: grid; gap: var(--gap); grid-template-columns: repeat(3, var(--row)); grid-template-rows: repeat(3, var(--row));
-    grid-template-areas: ". u ." "l . r" ". d ."; }
-  .dpad button { font-size: 20px; }
-  #quit { position: fixed; top: calc(10px + env(safe-area-inset-top)); right: calc(12px + env(safe-area-inset-right));
-    z-index: 5; height: 40px; padding: 0 14px; font-size: 14px; background: rgba(34,43,60,.85); color: #aab6cc; }
-  #quit.armed { background: #c0392b; color: #fff; }
-  #dot { position: fixed; top: calc(14px + env(safe-area-inset-top)); left: 14px; width: 10px; height: 10px; border-radius: 50%;
-    background: #d94c4c; box-shadow: 0 0 8px currentColor; color: #d94c4c; }
-  #dot.ok { background: #3fc77a; color: #3fc77a; }
-  #toast { position: fixed; left: 50%; bottom: calc(var(--dock) + 14px); transform: translateX(-50%); max-width: 80vw;
-    padding: 8px 16px; border-radius: 18px; background: rgba(20,26,38,.95); color: #dbe4f5; font-size: 14px;
-    opacity: 0; transition: opacity .25s; pointer-events: none; }
+  html, body { margin: 0; height: var(--vh); background: var(--bg); color: var(--ink);
+    font: 15px/1.3 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; overscroll-behavior: none;
+    -webkit-font-smoothing: antialiased; }
+  svg { display: block; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+  button { font: inherit; color: inherit; touch-action: manipulation; -webkit-user-select: none; user-select: none; }
+
+  /* trackpad card */
+  #pad { position: fixed; inset: calc(10px + env(safe-area-inset-top)) calc(10px + env(safe-area-inset-right)) calc(var(--dock) + 4px) calc(10px + env(safe-area-inset-left));
+    touch-action: none; user-select: none; -webkit-user-select: none; display: grid; place-items: center; text-align: center;
+    border-radius: 24px; border: 1px solid var(--hair);
+    background:
+      radial-gradient(rgba(255,255,255,.07) 1px, transparent 1.3px) 0 0 / 20px 20px,
+      radial-gradient(120% 90% at 50% 25%, #1b2639 0%, #111826 55%, #0d121c 100%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.05), 0 8px 30px rgba(0,0,0,.35); }
+  #hint { display: grid; gap: 12px; transition: opacity .6s; pointer-events: none; color: var(--muted); font-size: 13px; letter-spacing: .02em; }
+  #hint div { display: flex; align-items: center; gap: 10px; justify-content: center; }
+  #hint svg { width: 20px; height: 20px; color: #6f7f99; }
+  #hint b { color: #c9d4e8; font-weight: 600; }
+
+  /* status + quit float over the card corners */
+  .pill { position: fixed; z-index: 5; top: calc(20px + env(safe-area-inset-top)); display: flex; align-items: center; gap: 7px;
+    height: 34px; padding: 0 12px; border-radius: 999px; background: rgba(12,17,26,.72); border: 1px solid var(--hair);
+    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); font-size: 12px; font-weight: 600; letter-spacing: .02em; }
+  #status { left: calc(20px + env(safe-area-inset-left)); color: var(--muted); }
+  #dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 8px currentColor; color: var(--danger); }
+  #dot.ok { background: #36d17b; color: #36d17b; }
+  #quit { right: calc(20px + env(safe-area-inset-right)); border: 1px solid var(--hair); color: #b6c2d8; cursor: pointer; }
+  #quit svg { width: 16px; height: 16px; }
+  #quit.armed { background: var(--danger); border-color: transparent; color: #fff; animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 6px rgba(229,72,77,.25); } }
+
+  /* dock */
+  #dock { position: fixed; left: 0; right: 0; bottom: 0; height: var(--dock); display: grid; align-items: center; justify-content: center;
+    grid-template-columns: minmax(0, 200px) auto minmax(0, 200px); gap: 14px;
+    padding: 0 calc(12px + env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left)); }
+  .zone { display: flex; flex-direction: column; gap: var(--gap); height: var(--dpad); min-width: 0; }
+  .btn { position: relative; display: flex; align-items: center; justify-content: center; gap: 8px; flex: 1; min-width: 0; padding: 0 10px;
+    border: 1px solid var(--hair); border-radius: 18px; cursor: pointer;
+    background: linear-gradient(180deg, var(--surface-top), var(--surface-bot));
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 4px 12px rgba(0,0,0,.35);
+    font-size: 12px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+    transition: transform .08s ease, filter .08s ease, background .12s ease, border-color .12s ease; }
+  .btn svg { width: 22px; height: 22px; flex: none; }
+  .btn.down { transform: scale(.96); filter: brightness(1.25); }
+  .tile { flex-direction: column; gap: 7px; }
+  .tile svg { width: 26px; height: 26px; color: #9ec9ff; }
+  .tile.down { background: linear-gradient(180deg, #27456b, #1b3350); border-color: rgba(26,159,255,.45); }
+  .enter { flex: 1.3; background: linear-gradient(180deg, #2aa8ff, #1384e0); border-color: rgba(255,255,255,.18); color: #fff;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.3), 0 6px 16px rgba(26,159,255,.28); }
+  .esc svg { color: var(--muted); }
+  .kb.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent), 0 0 18px rgba(26,159,255,.25); color: #bfe3ff; }
+  .kb.on svg { color: var(--accent); }
+
+  /* round directional pad: four wedge buttons clipped to triangles inside a circle */
+  .dpad { position: relative; width: var(--dpad); height: var(--dpad); border-radius: 50%; overflow: hidden;
+    border: 1px solid var(--hair);
+    background: radial-gradient(circle at 50% 35%, var(--surface-top), var(--surface-bot) 75%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.07), 0 8px 22px rgba(0,0,0,.45); }
+  .wedge { position: absolute; inset: 0; border: 0; padding: 0; background: transparent; cursor: pointer; color: #b9c6dc;
+    transition: background .1s ease, color .1s ease; }
+  .wedge svg { position: absolute; width: 32px; height: 32px; stroke-width: 2.2; pointer-events: none; }
+  .wedge.up { clip-path: polygon(50% 50%, 0 0, 100% 0); }
+  .wedge.right { clip-path: polygon(50% 50%, 100% 0, 100% 100%); }
+  .wedge.down { clip-path: polygon(50% 50%, 100% 100%, 0 100%); }
+  .wedge.left { clip-path: polygon(50% 50%, 0 100%, 0 0); }
+  .wedge.up svg { top: 9%; left: 50%; margin-left: -16px; }
+  .wedge.down svg { bottom: 9%; left: 50%; margin-left: -16px; }
+  .wedge.left svg { left: 9%; top: 50%; margin-top: -16px; }
+  .wedge.right svg { right: 9%; top: 50%; margin-top: -16px; }
+  .wedge.pressed { background: rgba(26,159,255,.30); color: #fff; }
+  .dpad .cross { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; stroke: var(--bg); stroke-width: 2; opacity: .9; }
+  .hub { position: absolute; left: 50%; top: 50%; width: 32%; height: 32%; transform: translate(-50%, -50%); border-radius: 50%;
+    background: radial-gradient(circle at 50% 30%, #0f1522, #0a0f19); border: 1px solid var(--hair);
+    box-shadow: inset 0 2px 6px rgba(0,0,0,.6); }
+
+  #ripple { position: fixed; width: 60px; height: 60px; margin: -30px 0 0 -30px; border-radius: 50%;
+    border: 2px solid rgba(26,159,255,.8); background: rgba(26,159,255,.12); pointer-events: none; opacity: 0; }
+  #ripple.go { animation: rp .38s ease-out; }
+  @keyframes rp { from { opacity: .95; transform: scale(.4); } to { opacity: 0; transform: scale(1.25); } }
+
+  #toast { position: fixed; z-index: 6; left: 50%; bottom: calc(var(--dock) + 14px); transform: translateX(-50%); max-width: 82vw;
+    padding: 10px 18px; border-radius: 999px; background: rgba(14,20,31,.9); border: 1px solid var(--hair); color: var(--ink);
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); font-size: 14px; font-weight: 600;
+    opacity: 0; transition: opacity .25s; pointer-events: none; box-shadow: 0 8px 24px rgba(0,0,0,.45); }
   #toast.show { opacity: 1; }
-  #ripple { position: fixed; width: 56px; height: 56px; margin: -28px 0 0 -28px; border-radius: 50%;
-    border: 2px solid rgba(120,180,255,.7); pointer-events: none; opacity: 0; }
-  #ripple.go { animation: rp .35s ease-out; }
-  @keyframes rp { from { opacity: .9; transform: scale(.4); } to { opacity: 0; transform: scale(1.2); } }
-  #kb { position: fixed; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0;
-    resize: none; font-size: 16px; }
+  #kb { position: fixed; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; resize: none; font-size: 16px; }
+  @media (max-width: 360px) { .btn { gap: 6px; padding: 0 6px; font-size: 11px; letter-spacing: .05em; } .btn svg { width: 18px; height: 18px; } .tile svg { width: 22px; height: 22px; } }
+  @media (prefers-reduced-motion: reduce) { #quit.armed { animation: none; } #ripple.go { animation-duration: .01s; } .btn { transition: none; } }
 </style>
 </head>
 <body>
-<div id="dot"></div>
-<div id="pad"><div id="hint"><b>Touchpad</b><br>Drag to move · Tap to click<br>Two-finger tap = right click<br>Two-finger drag or flick = scroll</div></div>
+<div id="pad">
+  <div id="hint">
+    <div><svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg><span><b>Drag</b> to move</span></div>
+    <div><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8" opacity=".5"/></svg><span><b>Tap</b> to click &middot; two fingers to right-click</span></div>
+    <div><svg viewBox="0 0 24 24"><path d="M12 4v16M7 9l5-5 5 5M7 15l5 5 5-5"/></svg><span><b>Two fingers</b> to scroll or flick</span></div>
+  </div>
+</div>
 <div id="ripple"></div>
-<textarea id="kb" autocapitalize="sentences" autocomplete="off" autocorrect="on" spellcheck="true" aria-label="keyboard input"></textarea>
-<button id="quit" aria-label="Quit running app">✕ Quit app</button>
+<div class="pill" id="status"><span id="dot"></span><span id="statusText">Connecting</span></div>
+<button class="pill" id="quit" aria-label="Quit running app"><svg viewBox="0 0 24 24"><path d="M12 3v8M6.4 6.6a8 8 0 1 0 11.2 0"/></svg><span id="quitText">Quit app</span></button>
 <div id="toast"></div>
+<textarea id="kb" autocapitalize="sentences" autocomplete="off" autocorrect="on" spellcheck="true" aria-label="keyboard input"></textarea>
 <div id="dock">
   <div class="zone left">
-    <button data-act="steam" aria-label="Steam menu">Steam</button>
-    <button data-act="qam" aria-label="Quick access menu">Quick access</button>
+    <button class="btn tile" data-act="steam" aria-label="Steam menu"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="9" cy="14.5" r="3"/><path d="M11.4 12.6 18 8.5"/></svg>Steam</button>
+    <button class="btn tile" data-act="qam" aria-label="Quick access menu"><svg viewBox="0 0 24 24"><path d="M4 7h9M19 7h1M4 17h1M11 17h9"/><circle cx="16" cy="7" r="2.5"/><circle cx="8" cy="17" r="2.5"/></svg>Quick access</button>
   </div>
   <div class="dpad">
-    <button data-k="Up" data-repeat style="grid-area:u" aria-label="Up">▲</button>
-    <button data-k="Left" data-repeat style="grid-area:l" aria-label="Left">◀</button>
-    <button data-k="Right" data-repeat style="grid-area:r" aria-label="Right">▶</button>
-    <button data-k="Down" data-repeat style="grid-area:d" aria-label="Down">▼</button>
+    <button class="wedge up" data-k="Up" data-repeat aria-label="Up"><svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg></button>
+    <button class="wedge right" data-k="Right" data-repeat aria-label="Right"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+    <button class="wedge down" data-k="Down" data-repeat aria-label="Down"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+    <button class="wedge left" data-k="Left" data-repeat aria-label="Left"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
+    <svg class="cross" viewBox="0 0 100 100" preserveAspectRatio="none"><path d="M0 0L100 100M100 0L0 100"/></svg>
+    <div class="hub"></div>
   </div>
   <div class="zone right">
-    <div class="pair">
-      <button data-k="Escape" aria-label="Escape">Esc</button>
-      <button data-k="Enter" aria-label="Enter">Enter</button>
-    </div>
-    <button id="kbBtn" aria-label="Keyboard">⌨</button>
+    <button class="btn enter" data-k="Enter" aria-label="Enter"><svg viewBox="0 0 24 24"><path d="M20 5v7a3 3 0 0 1-3 3H5M9 11l-4 4 4 4"/></svg>Enter</button>
+    <button class="btn esc" data-k="Escape" aria-label="Escape"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>Esc</button>
+    <button class="btn kb" id="kbBtn" aria-label="Keyboard"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6.5 10h.01M10.5 10h.01M14.5 10h.01M17.5 10h.01M7.5 14h9"/></svg>Keys</button>
   </div>
 </div>
 <script>
 (() => {
   const $ = (s) => document.querySelector(s);
-  const pad = $('#pad'), dot = $('#dot'), kb = $('#kb'), ripple = $('#ripple'), hint = $('#hint');
+  const pad = $('#pad'), dot = $('#dot'), statusText = $('#statusText'), kb = $('#kb'), ripple = $('#ripple'), hint = $('#hint');
   const token = new URLSearchParams(location.search).get('t') || '';
   let ws, retry = 0, queue = [];
 
@@ -88,8 +148,8 @@
   function connect() {
     ws = new WebSocket(`ws://${location.host}/ws?t=${encodeURIComponent(token)}`);
     ws.onmessage = (e) => { try { const m = JSON.parse(e.data); if (m.t === 'toast') toast(m.m); } catch (err) {} };
-    ws.onopen = () => { retry = 0; dot.className = 'ok'; queue.forEach((m) => ws.send(m)); queue = []; };
-    ws.onclose = () => { dot.className = ''; setTimeout(connect, Math.min(3000, 300 * ++retry)); };
+    ws.onopen = () => { retry = 0; dot.className = 'ok'; statusText.textContent = 'Connected'; queue.forEach((m) => ws.send(m)); queue = []; };
+    ws.onclose = () => { dot.className = ''; statusText.textContent = 'Reconnecting'; setTimeout(connect, Math.min(3000, 300 * ++retry)); };
     ws.onerror = () => ws.close();
   }
   function send(o) {
@@ -217,16 +277,24 @@
     b.addEventListener('click', () => { buzz(); send({ t: 'act', a: b.dataset.act }); }));
   // quit needs a second tap within 3 s
   const quit = $('#quit'); let quitTimer = 0;
-  const disarm = () => { clearTimeout(quitTimer); quit.classList.remove('armed'); quit.textContent = '✕ Quit app'; };
+  const quitText = $('#quitText');
+  const disarm = () => { clearTimeout(quitTimer); quit.classList.remove('armed'); quitText.textContent = 'Quit app'; };
   quit.addEventListener('click', () => {
     buzz();
     if (quit.classList.contains('armed')) { disarm(); send({ t: 'act', a: 'quit' }); return; }
-    quit.classList.add('armed'); quit.textContent = 'Tap again to quit'; quitTimer = setTimeout(disarm, 3000);
+    quit.classList.add('armed'); quitText.textContent = 'Tap again to quit'; quitTimer = setTimeout(disarm, 3000);
   });
   const kbBtn = $('#kbBtn');
   kbBtn.addEventListener('click', () => (document.activeElement === kb ? kb.blur() : kb.focus()));
   kb.addEventListener('focus', () => kbBtn.classList.add('on'));
   kb.addEventListener('blur', () => kbBtn.classList.remove('on'));
+  // pressed state as a class: reliable on iOS, where :active lags
+  document.querySelectorAll('#dock button').forEach((b) => {
+    const cls = b.classList.contains('wedge') ? 'pressed' : 'down';
+    const on = () => b.classList.add(cls), off = () => b.classList.remove(cls);
+    b.addEventListener('pointerdown', on);
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach((ev) => b.addEventListener(ev, off));
+  });
   // keep the keyboard open when pressing the other buttons
   document.querySelectorAll('#dock button, #quit').forEach((b) =>
     b.addEventListener('pointerdown', (e) => { if (document.activeElement === kb && b !== kbBtn) e.preventDefault(); }));
