@@ -80,10 +80,13 @@ function Content() {
             <Qr text={s.url} />
           </PanelSectionRow>
           <PanelSectionRow>
-            <div style={{ fontSize: 11, wordBreak: "break-all", opacity: 0.8 }}>
-              Scan with your phone camera (same Wi-Fi), or open:<br />{s.url}
-              {s.alt_url && s.link_host === "name" && <><br /><br />Or by address:<br />{s.alt_url}</>}
+            <div style={{ fontSize: 11, opacity: 0.8 }}>
+              <b>Instructions:</b> Scan the code on the same network. A DHCP-reserved or static IP for this device is
+              preferred; mDNS is an alternative but may not work or may be slow on your phone.
             </div>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <div style={{ fontSize: 11, wordBreak: "break-all" }}>{s.url}</div>
           </PanelSectionRow>
           <PanelSectionRow>
             <ButtonItem layout="below" onClick={async () => setS(await regenerateToken())}>
@@ -97,7 +100,7 @@ function Content() {
           <PanelSectionRow>
             <ToggleField
               label="Use mDNS"
-              description="A host name that survives IP changes. Not all devices support it, and iPhones open it slowly."
+              description="A host name that survives IP changes. May be slow, or not work, on some devices and networks."
               checked={s.link_host === "name"}
               onChange={async (v) => setS(await setLinkHost(v ? "name" : "ip"))}
             />
