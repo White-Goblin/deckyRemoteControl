@@ -209,12 +209,52 @@ def test_store_atomic_and_recovers_from_backup():
 
 
 def test_links_prefer_the_stable_name_with_an_ip_fallback():
-    assert netinfo.links(8765, "T", "name", ip="10.0.0.5", name="steam-machine", mdns=True) == (
+    assert netinfo.links(8765, "T", "name", ip="10.0.0.5", fqdn="steam-machine.local") == (
         "http://steam-machine.local:8765/T/", "http://10.0.0.5:8765/T/")
-    assert netinfo.links(8765, "T", "ip", ip="10.0.0.5", name="steam-machine", mdns=True) == (
+    assert netinfo.links(8765, "T", "ip", ip="10.0.0.5", fqdn="steam-machine.local") == (
         "http://10.0.0.5:8765/T/", "http://steam-machine.local:8765/T/")
-    assert netinfo.links(8765, "T", "name", ip="10.0.0.5", name="steam-machine", mdns=False) == (
-        "http://10.0.0.5:8765/T/", None)                                   # no mDNS: only the IP
+    assert netinfo.links(8765, "T", "name", ip="10.0.0.5", fqdn=None) == (
+        "http://10.0.0.5:8765/T/", None)                                   # no mDNS name: only the IP
+
+
+def test_mdns_name_comes_from_avahi_not_a_guess():
+    # busctl prints the name avahi really advertises, which differs from the host name after a clash
+    assert netinfo.mdns_name(lambda: 'steam-machine-2.local') == "steam-machine-2.local"
+    class Done:
+        stdout = 's "steam-machine-2.local"\n'
+    real = netinfo.subprocess.run
+    try:
+        netinfo.subprocess.run = lambda *a, **k: Done()
+        assert netinfo._ask_avahi() == "steam-machine-2.local"
+        Done.stdout = "Failed to connect to bus\n"                         # avahi not running
+        assert netinfo._ask_avahi() is None
+        Done.stdout = 's "bad name; rm -rf"\n'                              # never trust odd output
+        assert netinfo._ask_avahi() is None
+        def missing(*a, **k): raise FileNotFoundError("busctl")
+        netinfo.subprocess.run = missing
+        assert netinfo._ask_avahi() is None
+    finally:
+        netinfo.subprocess.run = real
+
+
+def test_links_use_the_ip_by_default_and_the_name_with_mdns_on():
+    async def run():
+        tmp = tempfile.mkdtemp(); main = _load_main(tmp)
+        saved = main.netinfo.mdns_name, main.netinfo.lan_ip
+        main.netinfo.mdns_name = lambda: "box-2.local"
+        main.netinfo.lan_ip = lambda: "10.1.2.3"
+        try:
+            p = main.Plugin(); await p._main()
+            st = p._state()
+            assert main.DEFAULTS["link_host"] == "ip" and "sensitivity" not in p.settings
+            assert st["link_host"] == "ip" and ".local" not in st["url"] and st["url"].startswith("http://10.1.2.3:")
+            assert st["alt_url"].startswith("http://box-2.local:")
+            st = await p.set_link_host("name")
+            assert st["url"].startswith("http://box-2.local:") and st["alt_url"].startswith("http://10.1.2.3:")
+            assert (await p.set_link_host("bogus"))["link_host"] == "name"     # unknown values are ignored
+        finally:
+            main.netinfo.mdns_name, main.netinfo.lan_ip = saved
+    asyncio.run(run())
 
 
 def test_manifest_is_relative_so_the_saved_start_url_has_the_key():

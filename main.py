@@ -21,7 +21,7 @@ import uinput  # noqa: E402
 from wsserver import Server  # noqa: E402
 
 SETTINGS_FILE = os.path.join(decky.DECKY_PLUGIN_SETTINGS_DIR, "remote_control.json")
-DEFAULTS = {"port": 8765, "sensitivity": 1.0, "token": "", "enabled": False, "link_host": "name"}
+DEFAULTS = {"port": 8765, "token": "", "enabled": False, "link_host": "ip"}  # link_host: "ip" or "name" (mDNS)
 EMIT_INTERVAL = 1 / 60
 SYNC_INTERVAL = 0.08  # seconds between real-pointer checks while input flows
 SYNC_SNAP = 20  # device px of disagreement before the tracked position is replaced
@@ -79,7 +79,6 @@ class Plugin:
             "alt_url": alt_url,
             "link_host": self.settings["link_host"],
             "clients": self.clients,
-            "sensitivity": self.settings["sensitivity"],
             "cursor_ws": f"ws://127.0.0.1:{port}/{self.settings['token']}/ws?role=cursor",
             "error": self.error,
         }
@@ -160,10 +159,6 @@ class Plugin:
             for w in list(self.server.clients):
                 w.close()
         return self._state()
-
-    async def set_sensitivity(self, value: float):
-        self.settings["sensitivity"] = max(0.3, min(3.0, float(value)))
-        self._save()
 
     async def set_screen(self, width: int, height: int, scale: float):
         """Frontend reports the screen in CSS px and its device pixel ratio. The real pointer
@@ -306,7 +301,7 @@ class Plugin:
             self._sync_begin()
             dx, dy = float(m.get("dx", 0)), float(m.get("dy", 0))
             mag = math.hypot(dx, dy)
-            gain = self.settings["sensitivity"] * (1 + 0.05 * min(mag, 30)) * self.scale
+            gain = (1 + 0.05 * min(mag, 30)) * self.scale
             self.x = min(max(self.x + dx * gain, 0), self.width - 1)
             self.y = min(max(self.y + dy * gain, 0), self.height - 1)
             self.speed = self.speed * 0.6 + mag * gain / self.scale * 0.4

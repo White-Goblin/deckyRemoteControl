@@ -2,7 +2,6 @@ import {
   ButtonItem,
   PanelSection,
   PanelSectionRow,
-  SliderField,
   ToggleField,
   staticClasses,
 } from "@decky/ui";
@@ -20,14 +19,12 @@ interface State {
   alt_url: string | null;
   link_host: "name" | "ip";
   clients: number;
-  sensitivity: number;
   error: string;
 }
 
 const getState = callable<[], State>("get_state");
 const setEnabled = callable<[enabled: boolean], State>("set_enabled");
 const regenerateToken = callable<[], State>("regenerate_token");
-const setSensitivity = callable<[value: number], void>("set_sensitivity");
 const viewReady = callable<[], void>("view_ready");
 const setLinkHost = callable<[mode: string], State>("set_link_host");
 
@@ -85,7 +82,7 @@ function Content() {
           <PanelSectionRow>
             <div style={{ fontSize: 11, wordBreak: "break-all", opacity: 0.8 }}>
               Scan with your phone camera (same Wi-Fi), or open:<br />{s.url}
-              {s.alt_url && <><br /><br />Or by {s.link_host === "name" ? "address" : "name"}:<br />{s.alt_url}</>}
+              {s.alt_url && s.link_host === "name" && <><br /><br />Or by address:<br />{s.alt_url}</>}
             </div>
           </PanelSectionRow>
           <PanelSectionRow>
@@ -95,26 +92,18 @@ function Content() {
           </PanelSectionRow>
         </PanelSection>
       )}
-      <PanelSection title="Settings">
-        {s.alt_url && (
+      {s.alt_url && (
+        <PanelSection title="Settings">
           <PanelSectionRow>
             <ToggleField
-              label="Use IP address in link"
-              description="Only if your phone cannot open the .local name. A saved link then stops working when the device's IP changes."
-              checked={s.link_host === "ip"}
-              onChange={async (v) => setS(await setLinkHost(v ? "ip" : "name"))}
+              label="Use mDNS"
+              description="A host name that survives IP changes. Not all routers and devices support it."
+              checked={s.link_host === "name"}
+              onChange={async (v) => setS(await setLinkHost(v ? "name" : "ip"))}
             />
           </PanelSectionRow>
-        )}
-        <PanelSectionRow>
-          <SliderField
-            label="Pointer speed"
-            min={0.5} max={3} step={0.1} showValue
-            value={s.sensitivity}
-            onChange={(v) => { setS({ ...s, sensitivity: v }); setSensitivity(v); }}
-          />
-        </PanelSectionRow>
-      </PanelSection>
+        </PanelSection>
+      )}
     </>
   );
 }
