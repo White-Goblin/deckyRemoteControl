@@ -125,17 +125,25 @@
   #vol button + button { border-left: 1px solid var(--hair); }
   #vol button svg { width: 28px; height: 28px; }
   #vol button.down { background: rgba(26,159,255,.28); color: #fff; }
-  /* landscape phones: buttons on the left (volume strip on the far left), trackpad on the right */
+  /* landscape phones: a compact column of buttons on the left, the trackpad takes the rest.
+       [ Steam ][ Quick access ]
+       [vol][      wheel      ]      the wheel is as wide as two tiles minus the volume strip
+       [ keyboard ][   Esc    ]                                                                */
   @media (orientation: landscape) and (max-height: 560px) {
-    :root { --dpad: min(clamp(120px, 46vh, 170px), 24vw); }
+    :root { --tile: clamp(84px, 13vw, 108px); --dpad: calc(2 * var(--tile) - 46px); }
     #app { flex-direction: row; padding-bottom: max(0px, calc(env(safe-area-inset-bottom) - 12px)); }
-    #dock { order: -1; align-self: center; grid-template-columns: 46px clamp(64px, 11vw, 92px) auto clamp(64px, 11vw, 92px); grid-template-rows: var(--dpad);
-      grid-template-areas: "vol left dpad right"; column-gap: 8px; padding: 4px 4px 4px 12px; }
+    #dock { order: -1; align-self: stretch; align-content: center; justify-content: start;
+      grid-template-columns: 46px 8px calc(var(--tile) - 54px) 8px var(--tile);
+      grid-template-rows: minmax(0, 88px) var(--dpad) minmax(0, 88px); column-gap: 0; row-gap: 8px;
+      grid-template-areas: "steam steam steam . qam" "vol . dpad dpad dpad" "kb kb kb . esc";
+      padding: 10px 4px 10px 12px; }
+    .zone { display: contents; }
+    [data-act="steam"] { grid-area: steam; } [data-act="qam"] { grid-area: qam; }
+    .esc { grid-area: esc; } #kbBtn { grid-area: kb; }
     #vol { flex-direction: column-reverse; width: 46px; height: var(--dpad); }   /* + on top, - at the bottom */
     #vol button + button { border-left: 0; border-top: 1px solid var(--hair); }
     #pad { margin: 10px 10px 10px 4px; min-width: 120px; }
   }
-  @supports (height: 1dvh) { @media (orientation: landscape) and (max-height: 560px) { :root { --dpad: min(clamp(120px, 46dvh, 170px), 24vw); } } }
   #ripple { position: fixed; width: 60px; height: 60px; margin: -30px 0 0 -30px; border-radius: 50%;
     border: 2px solid rgba(26,159,255,.8); background: rgba(26,159,255,.12); pointer-events: none; opacity: 0; }
   #ripple.go { animation: rp .38s ease-out; }
